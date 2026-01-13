@@ -1,32 +1,27 @@
 import streamlit as st
+import streamlit_authenticator as stauth
+import yaml
+from yaml.loader import SafeLoader
+from streamlit_authenticator.utilities.hasher import Hasher
 import requests
 import pandas as pd
 from datetime import datetime
 import time
 from urllib.parse import urlparse
-import openpyxl
+import io
+from openpyxl import Workbook
 from openpyxl.styles import Alignment, PatternFill, Font
 from openpyxl.utils import get_column_letter
-import io
-# ▼▼▼ パスワード保護 ▼▼▼
-password = st.text_input("パスワードを入力してください", type="password")
-if password != "LkHg0001":  # ←ここに設定したいパスワードを入れる
-    st.warning("正しいパスワードを入力すると機能が表示されます。")
-    st.stop()  # パスワードが違う場合はここで処理を止める
+
 # ▼▼▼ 設定エリア ▼▼▼
-# ※販売時はここにあなたのIDを設定します
 DEFAULT_APP_ID = '1052224946268447244' 
 REVIEW_RATE = 0.08  
-PRICE_UPLIFT = 1.0  
+PRICE_UPLIFT = 1.2  
 
 # --- ページ設定 ---
-st.set_page_config(
-    page_title="楽天市場 競合分析ツール Pro",
-    page_icon="📊",
-    layout="wide"
-)
+st.set_page_config(page_title="楽天市場 競合分析ツール Pro", page_icon="📊", layout="wide")
 
-# --- スタイル調整 (余白やフォントなど) ---
+# --- CSSスタイル ---
 st.markdown("""
 <style>
     .main { padding-top: 2rem; }
@@ -35,7 +30,90 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- ロジック関数群 (変更なし) ---
+# -------------------------------------------
+# 1. 認証・ユーザー管理ロジック
+# -------------------------------------------
+def load_config():
+    with open('config.yaml') as file:
+        config = yaml.load(file, Loader=SafeLoader)
+    return config
+
+def save_config(config):
+    with open('config.yaml', 'w') as file:
+        yaml.dump(config, file, default_flow_style=False)
+
+def show_login_page():
+    config = load_config()
+    
+    authenticator = stauth.Authenticate(
+        config['credentials'],
+        config['cookie']['name'],
+        config['cookie']['key'],
+        config['cookie']['expiry_days'],
+        preauthorized=config['preauthorized']
+    )
+
+    # タブでログインと新規登録を切り替え
+    tab1, tab2 = st.tabs(["🔑 ログイン", "📝 新規アカウント作成"])
+
+    # --- ログインタブ ---
+    with tab1:
+        st.subheader("ログイン")
+        name, authentication_status, username = authenticator.login("Login", "main")
+
+        if authentication_status:
+            return True, name, username, authenticator
+        elif authentication_status is False:
+            st.error("ユーザー名またはパスワードが間違っています")
+            return False, None, None, None
+        elif authentication_status is None:
+            st.warning("ユーザー名とパスワードを入力してください")
+            return False, None, None, None
+
+    # --- 新規登録タブ ---
+    with tab2:
+        st.subheader("アカウント作成")
+        with st.form("register_form"):
+            new_email = st.text_input("メールアドレス")
+            new_user = st.text_input("ユーザーID (半角英数)", placeholder="例: yamada01")
+            new_name = st.text_input("担当者名")
+            new_pass = st.text_input("パスワード", type="password")
+            new_pass2 = st.text_input("パスワード(確認)", type="password")
+            
+            # 追加項目
+            new_company = st.text_input("会社名")
+            new_tel = st.text_input("電話番号")
+            
+            submit = st.form_submit_button("登録する")
+
+            if submit:
+                if not (new_email and new_user and new_name and new_pass and new_company and new_tel):
+                    st.warning("すべての項目を入力してください。")
+                elif new_pass != new_pass2:
+                    st.warning("パスワードが一致しません。")
+                elif new_user in config['credentials']['usernames']:
+                    st.error("そのユーザーIDは既に使用されています。")
+                else:
+                    # パスワードのハッシュ化
+                    hashed_pass = Hasher([new_pass]).generate()[0]
+                    
+                    # データの保存
+                    config['credentials']['usernames'][new_user] = {
+                        'email': new_email,
+                        'name': new_name,
+                        'password': hashed_pass,
+                        'company': new_company,
+                        'tel': new_tel
+                    }
+                    save_config(config)
+                    st.success("登録が完了しました！「ログイン」タブからログインしてください。")
+    
+    return False, None, None, None
+
+
+# -------------------------------------------
+# 2. 分析ロジック (既存コード)
+# -------------------------------------------
 def get_item_key_from_url(url):
     try:
         parsed = urlparse(url)
@@ -110,32 +188,6 @@ def get_shop_top_items(shop_code, shop_name, limit=30):
         return results
     except: return []
 
-def create_excel_bytes(df1, df2):
-    output = io.BytesIO()
-    
-    # データ整形
-    if not df1.empty: df1 = df1.sort_values(by='推定累積売上', ascending=False)
-    if not df2.empty: df2 = df2.sort_values(by='推定累積売上', ascending=False)
-
-    cols1 = ['検索タイプ', '検索条件', '商品名', '価格', 'レビュー総数', '推定累積販売数', '推定累積売上', 'ポイント倍率', 'クーポン有無', 'ショップ名', '商品URL']
-    cols2 = ['対象店舗', '商品名', '価格', 'レビュー総数', '推定累積販売数', '推定累積売上', 'ポイント倍率', 'クーポン有無', '商品URL']
-    
-    df1 = df1.reindex(columns=cols1)
-    df2 = df2.reindex(columns=cols2) if not df2.empty else pd.DataFrame()
-
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # シート1書き込み
-        if not df1.empty:
-            df1.to_excel(writer, sheet_name='検索結果(売上順)', index=False)
-            format_worksheet(writer.sheets['検索結果(売上順)'])
-            
-        # シート2書き込み
-        if not df2.empty:
-            df2.to_excel(writer, sheet_name='店舗別売れ筋(売上順)', index=False)
-            format_worksheet(writer.sheets['店舗別売れ筋(売上順)'])
-            
-    return output.getvalue()
-
 def format_worksheet(worksheet):
     left_align = Alignment(horizontal='left', vertical='center')
     fill_color = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
@@ -167,15 +219,52 @@ def format_worksheet(worksheet):
         elif header_val in ["検索条件", "ショップ名", "対象店舗"]: worksheet.column_dimensions[column].width = 25
         else: worksheet.column_dimensions[column].width = 15
 
-# --- メインUI ---
-def main():
-    st.title("楽天市場 競合分析ツール Pro")
-    st.markdown("調査したい **キーワード、JAN、URL** を入力してください。（改行で複数入力可）")
+def create_excel_bytes(df1, df2):
+    output = io.BytesIO()
+    if not df1.empty: df1 = df1.sort_values(by='推定累積売上', ascending=False)
+    if not df2.empty: df2 = df2.sort_values(by='推定累積売上', ascending=False)
 
-    # 入力フォーム
+    cols1 = ['検索タイプ', '検索条件', '商品名', '価格', 'レビュー総数', '推定累積販売数', '推定累積売上', 'ポイント倍率', 'クーポン有無', 'ショップ名', '商品URL']
+    cols2 = ['対象店舗', '商品名', '価格', 'レビュー総数', '推定累積販売数', '推定累積売上', 'ポイント倍率', 'クーポン有無', '商品URL']
+    
+    df1 = df1.reindex(columns=cols1)
+    df2 = df2.reindex(columns=cols2) if not df2.empty else pd.DataFrame()
+
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        if not df1.empty:
+            df1.to_excel(writer, sheet_name='検索結果(売上順)', index=False)
+            format_worksheet(writer.sheets['検索結果(売上順)'])
+        if not df2.empty:
+            df2.to_excel(writer, sheet_name='店舗別売れ筋(売上順)', index=False)
+            format_worksheet(writer.sheets['店舗別売れ筋(売上順)'])
+    return output.getvalue()
+
+
+# -------------------------------------------
+# 3. メインアプリケーション実行
+# -------------------------------------------
+def main():
+    # 認証チェック
+    is_logged_in, name, username, authenticator = show_login_page()
+
+    if not is_logged_in:
+        st.stop() # ログインしていない場合はここで処理を止める
+
+    # ▼▼▼ 以下、ログイン成功後に表示される画面 ▼▼▼
+    
+    # サイドバーにユーザー情報とログアウトボタンを表示
+    with st.sidebar:
+        st.write(f"ようこそ、**{name}** 様")
+        config = load_config()
+        user_info = config['credentials']['usernames'][username]
+        st.info(f"会社名: {user_info.get('company', '-')}\n\nTEL: {user_info.get('tel', '-')}")
+        authenticator.logout("ログアウト", "sidebar")
+
+    st.title("楽天市場 競合分析ツール Pro")
+    st.markdown(f"調査したい **キーワード、JAN、URL** を入力してください。")
+
     input_text = st.text_area("検索リスト", height=150, placeholder="例:\n4968912801046\nダクトレールファン\nhttps://item.rakuten.co.jp/...")
     
-    # 実行ボタン
     if st.button("分析を開始する"):
         if not input_text.strip():
             st.warning("キーワードが入力されていません。")
@@ -183,7 +272,6 @@ def main():
 
         target_list = [{'query': line.strip()} for line in input_text.split('\n') if line.strip()]
         
-        # 処理開始
         status_text = st.empty()
         progress_bar = st.progress(0)
         
@@ -217,36 +305,26 @@ def main():
                 shop_items = get_shop_top_items(s_code, s_name, limit=30)
                 sheet2_data.extend(shop_items)
                 
-                # 40%からスタートして残り60%を進める
                 current_progress = 40 + int((i+1) / max(1, total_shops) * 60)
                 progress_bar.progress(min(100, current_progress))
 
             status_text.text("Excelファイル生成中...")
             
-            # 結果処理
             if sheet1_data:
                 df1 = pd.DataFrame(sheet1_data)
                 df2 = pd.DataFrame(sheet2_data)
-                
-                # Excelバイナリ作成
                 excel_data = create_excel_bytes(df1, df2)
                 
                 progress_bar.progress(100)
-                status_text.success("分析完了！以下のボタンからダウンロードしてください。")
+                status_text.success("分析完了！")
                 
-                # ダウンロードボタン表示
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
                 st.download_button(
-                    label="📊 分析結果Excelをダウンロード",
+                    label="📊 Excelをダウンロード",
                     data=excel_data,
                     file_name=f"rakuten_analysis_{timestamp}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-                
-                # プレビュー表示（オプション）
-                with st.expander("データプレビュー"):
-                    st.dataframe(df1.head(10))
-
             else:
                 st.error("データが見つかりませんでした。")
 
