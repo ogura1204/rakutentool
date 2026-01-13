@@ -2,5 +2,5 @@ streamlit
 requests
 pandas
 openpyxl
-streamlit-authenticator
+streamlit-authenticator==0.2.3
 pyyaml
