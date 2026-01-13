@@ -2,7 +2,7 @@ import streamlit as st
 import streamlit_authenticator as stauth
 import yaml
 from yaml.loader import SafeLoader
-from streamlit_authenticator.utilities.hasher import Hasher
+from streamlit_authenticator import Hasher
 import requests
 import pandas as pd
 from datetime import datetime
