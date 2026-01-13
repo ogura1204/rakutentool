@@ -8,7 +8,11 @@ import openpyxl
 from openpyxl.styles import Alignment, PatternFill, Font
 from openpyxl.utils import get_column_letter
 import io
-
+# ▼▼▼ パスワード保護 ▼▼▼
+password = st.text_input("パスワードを入力してください", type="password")
+if password != "LkHg0001":  # ←ここに設定したいパスワードを入れる
+    st.warning("正しいパスワードを入力すると機能が表示されます。")
+    st.stop()  # パスワードが違う場合はここで処理を止める
 # ▼▼▼ 設定エリア ▼▼▼
 # ※販売時はここにあなたのIDを設定します
 DEFAULT_APP_ID = '1052224946268447244' 
