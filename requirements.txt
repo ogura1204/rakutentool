@@ -1,4 +1,6 @@
-streamlit  
-requests  
-pandas  
-openpyxl  
+streamlit
+requests
+pandas
+openpyxl
+streamlit-authenticator
+pyyaml
