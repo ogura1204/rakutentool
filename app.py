@@ -1,8 +1,4 @@
 import streamlit as st
-import streamlit_authenticator as stauth
-import yaml
-from yaml.loader import SafeLoader
-from streamlit_authenticator import Hasher
 import requests
 import pandas as pd
 from datetime import datetime
@@ -31,88 +27,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------
-# 1. 認証・ユーザー管理ロジック
-# -------------------------------------------
-def load_config():
-    with open('config.yaml') as file:
-        config = yaml.load(file, Loader=SafeLoader)
-    return config
-
-def save_config(config):
-    with open('config.yaml', 'w') as file:
-        yaml.dump(config, file, default_flow_style=False)
-
-def show_login_page():
-    config = load_config()
-    
-    authenticator = stauth.Authenticate(
-        config['credentials'],
-        config['cookie']['name'],
-        config['cookie']['key'],
-        config['cookie']['expiry_days'],
-        preauthorized=config['preauthorized']
-    )
-
-    # タブでログインと新規登録を切り替え
-    tab1, tab2 = st.tabs(["🔑 ログイン", "📝 新規アカウント作成"])
-
-    # --- ログインタブ ---
-    with tab1:
-        st.subheader("ログイン")
-        name, authentication_status, username = authenticator.login("Login", "main")
-
-        if authentication_status:
-            return True, name, username, authenticator
-        elif authentication_status is False:
-            st.error("ユーザー名またはパスワードが間違っています")
-            return False, None, None, None
-        elif authentication_status is None:
-            st.warning("ユーザー名とパスワードを入力してください")
-            return False, None, None, None
-
-    # --- 新規登録タブ ---
-    with tab2:
-        st.subheader("アカウント作成")
-        with st.form("register_form"):
-            new_email = st.text_input("メールアドレス")
-            new_user = st.text_input("ユーザーID (半角英数)", placeholder="例: yamada01")
-            new_name = st.text_input("担当者名")
-            new_pass = st.text_input("パスワード", type="password")
-            new_pass2 = st.text_input("パスワード(確認)", type="password")
-            
-            # 追加項目
-            new_company = st.text_input("会社名")
-            new_tel = st.text_input("電話番号")
-            
-            submit = st.form_submit_button("登録する")
-
-            if submit:
-                if not (new_email and new_user and new_name and new_pass and new_company and new_tel):
-                    st.warning("すべての項目を入力してください。")
-                elif new_pass != new_pass2:
-                    st.warning("パスワードが一致しません。")
-                elif new_user in config['credentials']['usernames']:
-                    st.error("そのユーザーIDは既に使用されています。")
-                else:
-                    # パスワードのハッシュ化
-                    hashed_pass = Hasher([new_pass]).generate()[0]
-                    
-                    # データの保存
-                    config['credentials']['usernames'][new_user] = {
-                        'email': new_email,
-                        'name': new_name,
-                        'password': hashed_pass,
-                        'company': new_company,
-                        'tel': new_tel
-                    }
-                    save_config(config)
-                    st.success("登録が完了しました！「ログイン」タブからログインしてください。")
-    
-    return False, None, None, None
-
-
-# -------------------------------------------
-# 2. 分析ロジック (既存コード)
+# ロジック関数群
 # -------------------------------------------
 def get_item_key_from_url(url):
     try:
@@ -189,29 +104,45 @@ def get_shop_top_items(shop_code, shop_name, limit=30):
     except: return []
 
 def format_worksheet(worksheet):
+    # スタイル定義
     left_align = Alignment(horizontal='left', vertical='center')
-    fill_color = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
-    hyperlink_font = Font(color="0000FF", underline="single")
+    fill_color = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid") # 薄いグレー
+    hyperlink_font = Font(color="0000FF", underline="single") # 青色リンク
+    
+    # 桁区切りにするカラム
     num_cols = ["価格", "レビュー総数", "推定累積販売数", "推定累積売上"]
     
+    # 全セルループ設定
     for row in worksheet.iter_rows():
+        # 行の高さを25に
         worksheet.row_dimensions[row[0].row].height = 25
+        
         for cell in row:
-            cell.alignment = left_align
+            cell.alignment = left_align # 左揃え
+            
+            # ヘッダー行の設定
             if cell.row == 1:
                 cell.fill = fill_color
                 continue
             
+            # データ行の設定
             header_val = worksheet.cell(row=1, column=cell.column).value
+            
+            # 数値フォーマット (桁区切り)
             if header_val in num_cols:
                 cell.number_format = '#,##0'
+            
+            # URLハイパーリンク化
             if header_val == "商品URL" and cell.value:
                 cell.hyperlink = cell.value
                 cell.font = hyperlink_font
 
+    # ヘッダー固定
     worksheet.freeze_panes = 'A2'
+    # オートフィルター
     worksheet.auto_filter.ref = worksheet.dimensions
     
+    # 列幅調整
     for col in worksheet.columns:
         column = get_column_letter(col[0].column)
         header_val = col[0].value
@@ -221,9 +152,12 @@ def format_worksheet(worksheet):
 
 def create_excel_bytes(df1, df2):
     output = io.BytesIO()
+    
+    # 売上順ソート
     if not df1.empty: df1 = df1.sort_values(by='推定累積売上', ascending=False)
     if not df2.empty: df2 = df2.sort_values(by='推定累積売上', ascending=False)
 
+    # カラム並び替え
     cols1 = ['検索タイプ', '検索条件', '商品名', '価格', 'レビュー総数', '推定累積販売数', '推定累積売上', 'ポイント倍率', 'クーポン有無', 'ショップ名', '商品URL']
     cols2 = ['対象店舗', '商品名', '価格', 'レビュー総数', '推定累積販売数', '推定累積売上', 'ポイント倍率', 'クーポン有無', '商品URL']
     
@@ -237,31 +171,15 @@ def create_excel_bytes(df1, df2):
         if not df2.empty:
             df2.to_excel(writer, sheet_name='店舗別売れ筋(売上順)', index=False)
             format_worksheet(writer.sheets['店舗別売れ筋(売上順)'])
+            
     return output.getvalue()
 
-
 # -------------------------------------------
-# 3. メインアプリケーション実行
+# メインアプリケーション
 # -------------------------------------------
 def main():
-    # 認証チェック
-    is_logged_in, name, username, authenticator = show_login_page()
-
-    if not is_logged_in:
-        st.stop() # ログインしていない場合はここで処理を止める
-
-    # ▼▼▼ 以下、ログイン成功後に表示される画面 ▼▼▼
-    
-    # サイドバーにユーザー情報とログアウトボタンを表示
-    with st.sidebar:
-        st.write(f"ようこそ、**{name}** 様")
-        config = load_config()
-        user_info = config['credentials']['usernames'][username]
-        st.info(f"会社名: {user_info.get('company', '-')}\n\nTEL: {user_info.get('tel', '-')}")
-        authenticator.logout("ログアウト", "sidebar")
-
     st.title("楽天市場 競合分析ツール Pro")
-    st.markdown(f"調査したい **キーワード、JAN、URL** を入力してください。")
+    st.markdown("調査したい **キーワード、JAN、URL** を入力してください。（改行で複数入力可）")
 
     input_text = st.text_area("検索リスト", height=150, placeholder="例:\n4968912801046\nダクトレールファン\nhttps://item.rakuten.co.jp/...")
     
