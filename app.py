@@ -10,13 +10,12 @@ from openpyxl.styles import Alignment, PatternFill, Font
 from openpyxl.utils import get_column_letter
 
 # ▼▼▼ 設定エリア ▼▼▼
-# ユーザー様のアプリID
 APP_ID = '1052224946268447244' 
 REVIEW_RATE = 0.08  
 PRICE_UPLIFT = 1.2  
 
 # --- ページ設定 ---
-st.set_page_config(page_title="楽天市場 運営支援ツール Suite v6", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="楽天市場 運営支援ツール Suite v7", page_icon="🛍️", layout="wide")
 
 # --- CSSスタイル ---
 st.markdown("""
@@ -108,22 +107,17 @@ def get_shop_top_items(shop_code, shop_name, limit=30):
 
 # --- RPP改善用ロジック ---
 def get_current_price_for_rpp(item_manage_number, shop_code):
-    """
-    修正版: itemCode指定ではなく、shopCode + keyword指定で検索する。
-    これによりAPIエラー400を回避しやすくなる。
-    """
     url = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
     
-    # 商品管理番号から余計な文字列を除去（念のため）
+    # "lykke-hygge:abc-123" 対策
     keyword = str(item_manage_number).strip()
     if ":" in keyword:
-        # "lykke-hygge:abc-123" となっている場合、後半だけ取り出す
         keyword = keyword.split(":")[-1]
 
     params = {
         "applicationId": APP_ID,
         "shopCode": shop_code,
-        "keyword": keyword, # 商品管理番号をキーワードとして検索
+        "keyword": keyword,
         "hits": 1
     }
     
@@ -137,17 +131,12 @@ def get_current_price_for_rpp(item_manage_number, shop_code):
             else:
                 return None, "該当なし"
         else:
-            # エラー詳細を取得
-            error_desc = data.get('error_description', '')
-            error_msg = data.get('error', '')
-            return None, f"APIエラー({res.status_code}): {error_desc} {error_msg}"
-            
+            return None, f"APIエラー({res.status_code})"
     except Exception as e:
-        return None, f"通信エラー"
+        return None, "通信エラー"
 
 # --- ヘルパー関数: データクリーニング ---
 def clean_number(val, default_val=0):
-    """円、カンマ、%を取り除いて数値にする"""
     if pd.isna(val): return default_val
     s_val = str(val).replace(',', '').replace('円', '').replace('%', '').strip()
     if s_val == '' or s_val.lower() == 'nan': return default_val
@@ -161,7 +150,11 @@ def format_worksheet(worksheet):
     left_align = Alignment(horizontal='left', vertical='center')
     fill_color = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
     hyperlink_font = Font(color="0000FF", underline="single")
-    num_cols = ["価格", "レビュー総数", "推定累積販売数", "推定累積売上", "現在価格", "実績CPC", "推奨CPC", "ROAS", "クリック数"]
+    
+    # 数値フォーマットする列名（ユーザー指定の列名に合わせて追加）
+    num_cols = ["価格", "レビュー総数", "推定累積販売数", "推定累積売上", 
+                "現在価格", "入札単価", "推奨入札単価", "商品CPC", "クリック数(合計)", 
+                "実績額(合計)", "CPC実績(合計)", "売上金額(合計720時間)", "売上件数(合計720時間)", "注文獲得単価(合計720時間)"]
     
     for row in worksheet.iter_rows():
         worksheet.row_dimensions[row[0].row].height = 25
@@ -183,15 +176,13 @@ def format_worksheet(worksheet):
     
     for col in worksheet.columns:
         column = get_column_letter(col[0].column)
-        worksheet.column_dimensions[column].width = 15
+        worksheet.column_dimensions[column].width = 18
 
 # ==========================================
 # メインアプリケーション
 # ==========================================
 def main():
-    st.title("楽天市場 運営支援ツール Suite v6")
-    
-    # 共通ID設定（内部）
+    st.title("楽天市場 運営支援ツール Suite v7")
     
     tab1, tab2 = st.tabs(["📊 競合分析ツール", "💰 RPP広告改善ツール"])
 
@@ -286,10 +277,9 @@ def main():
         with st.expander("詳細設定", expanded=True):
             c1, c2, c3, c4 = st.columns(4)
             target_roas = c1.number_input("目標ROAS (%)", min_value=100, value=400, step=50)
-            min_cpc = c2.number_input("最低CPC (円)", min_value=10, value=25)
-            max_cpc = c3.number_input("最高CPC (円)", min_value=10, value=100)
-            # ★修正: デフォルトを7行目に設定
-            skip_rows_num = c4.number_input("ヘッダー開始行", min_value=1, value=7, help="通常は7行目または8行目です。")
+            min_cpc = c2.number_input("最低入札単価 (円)", min_value=10, value=25)
+            max_cpc = c3.number_input("最高入札単価 (円)", min_value=10, value=100)
+            skip_rows_num = c4.number_input("ヘッダー開始行", min_value=1, value=7, help="通常は7行目です。")
 
         if st.button("価格取得＆改善実行", key="rpp_btn"):
             if not uploaded_file or not my_shop_code:
@@ -299,7 +289,7 @@ def main():
                     df_rpp = None
                     skip_rows_count = skip_rows_num - 1 
 
-                    # --- 1. 読み込み ---
+                    # 1. 読み込み
                     if uploaded_file.name.endswith('.xlsx') or uploaded_file.name.endswith('.xls'):
                         uploaded_file.seek(0)
                         try:
@@ -315,34 +305,23 @@ def main():
                             except: continue
                     
                     if df_rpp is None:
-                        st.error(f"読み込み失敗。ヘッダー開始行({skip_rows_num}行目)が正しいか確認してください。")
+                        st.error(f"読み込み失敗。ヘッダー開始行({skip_rows_num}行目)の設定を確認してください。")
                         st.stop()
                     
-                    # --- 2. 列名の正規化 ---
-                    col_map = {}
+                    # 2. 列名チェック (指定された正確な列名)
+                    req_cols = [
+                        "商品管理番号", "入札単価", "CTR(%)", "商品CPC", "クリック数(合計)", 
+                        "実績額(合計)", "CPC実績(合計)", "売上金額(合計720時間)", 
+                        "売上件数(合計720時間)", "CVR(合計720時間)(%)", "ROAS(合計720時間)(%)", 
+                        "注文獲得単価(合計720時間)"
+                    ]
                     
-                    # 商品管理番号
-                    for c in ['商品管理番号', '商品URL', 'item_code', 'management_no']:
-                        if c in df_rpp.columns: col_map['item_code'] = c; break
-                    
-                    # 実績CPC
-                    for c in ['実績CPC', 'クリック単価', 'CPC', '平均CPC', 'クリック単価(円)']:
-                        if c in df_rpp.columns: col_map['cpc'] = c; break
-                    
-                    # ROAS
-                    for c in ['ROAS', 'ROAS(%)', '売上対広告費比率']:
-                        if c in df_rpp.columns: col_map['roas'] = c; break
-                    
-                    # クリック数
-                    for c in ['クリック数', 'Clicks', 'クリック']:
-                        if c in df_rpp.columns: col_map['clicks'] = c; break
-                    
-                    if 'item_code' not in col_map:
-                        st.error(f"「商品管理番号」列が見つかりません。読み込んだ列名: {list(df_rpp.columns)}")
+                    # 商品管理番号さえあれば動くようにする（他はなくてもエラーにしないが、ある前提で進む）
+                    if "商品管理番号" not in df_rpp.columns:
+                        st.error(f"CSVの中に「商品管理番号」列が見つかりません。読み込んだ列名: {list(df_rpp.columns)}")
                         st.stop()
-
-                    st.write(f"データ件数: {len(df_rpp)}件 / 読み取り列: {col_map}")
                     
+                    st.write(f"データ件数: {len(df_rpp)}件")
                     progress_rpp = st.progress(0)
                     results_rpp = []
                     total_rows = len(df_rpp)
@@ -350,49 +329,63 @@ def main():
                     for index, row in df_rpp.iterrows():
                         progress_rpp.progress((index + 1) / total_rows)
                         
-                        # 商品コード
-                        item_manage_number = str(row[col_map['item_code']]).strip()
+                        item_manage_number = str(row.get("商品管理番号", "")).strip()
                         if not item_manage_number or item_manage_number.lower() == 'nan': continue
                         
-                        # 数値取得
-                        current_cpc = clean_number(row.get(col_map.get('cpc')), default_val=25)
-                        roas = clean_number(row.get(col_map.get('roas')), default_val=0)
-                        clicks = int(clean_number(row.get(col_map.get('clicks')), default_val=0))
+                        # 指定列の読み込み
+                        current_bid = clean_number(row.get("入札単価"), 25) # 入札単価
+                        actual_cpc = clean_number(row.get("CPC実績(合計)"), 25)
+                        roas = clean_number(row.get("ROAS(合計720時間)(%)"), 0)
+                        clicks = int(clean_number(row.get("クリック数(合計)"), 0))
                         
-                        # APIで価格取得
+                        # API価格取得
                         current_price, status_msg = get_current_price_for_rpp(item_manage_number, my_shop_code)
                         time.sleep(0.3)
                         
-                        # ロジック
-                        new_cpc = current_cpc
+                        # 改善ロジック (入札単価を調整)
+                        base_cpc = current_bid if current_bid > 0 else actual_cpc # 入札単価があればそれ基準、なければ実績CPC基準
+                        new_bid = base_cpc
                         reason = "維持"
                         
                         if roas == 0 and clicks > 20:
-                            new_cpc = max(min_cpc, current_cpc - 10)
+                            new_bid = max(min_cpc, base_cpc - 10)
                             reason = "クリック過多・売上なし"
                         elif 0 < roas < target_roas:
-                            new_cpc = max(min_cpc, current_cpc - 5)
+                            new_bid = max(min_cpc, base_cpc - 5)
                             reason = "ROAS低・抑制"
                         elif roas > (target_roas + 200):
-                            new_cpc = min(max_cpc, current_cpc + 10)
+                            new_bid = min(max_cpc, base_cpc + 10)
                             reason = "ROAS好調・強化"
                         
-                        results_rpp.append({
+                        # 結果格納用データの作成（元のデータを全部入れる）
+                        row_data = {
                             "商品管理番号": item_manage_number,
                             "現在価格": current_price if current_price else "取得失敗",
                             "APIステータス": status_msg,
-                            "実績CPC": current_cpc,
-                            "推奨CPC": int(new_cpc),
-                            "変更理由": reason,
-                            "ROAS": roas,
-                            "クリック数": clicks
-                        })
+                            "推奨入札単価": int(new_bid),
+                            "変更理由": reason
+                        }
+                        # 元のCSVにあった指定列も全て追加
+                        for col in req_cols:
+                            if col != "商品管理番号": # 重複しないよう除外
+                                row_data[col] = row.get(col, "")
+                                
+                        results_rpp.append(row_data)
                     
                     if not results_rpp:
-                        st.warning("処理できるデータがありませんでした。")
+                        st.warning("処理データなし")
                     else:
+                        # 並び替え: 重要な項目を前に
+                        first_cols = ["商品管理番号", "現在価格", "推奨入札単価", "変更理由", "入札単価", "APIステータス"]
+                        other_cols = [c for c in req_cols if c not in ["商品管理番号", "入札単価"]]
+                        final_cols = first_cols + other_cols
+                        
                         df_res = pd.DataFrame(results_rpp)
-                        st.success("完了しました！")
+                        # カラムの並び替え（存在するものだけ）
+                        existing_cols = [c for c in final_cols if c in df_res.columns]
+                        df_res = df_res[existing_cols]
+                        
+                        st.success("完了！")
                         st.dataframe(df_res)
                         
                         output = io.BytesIO()
@@ -403,7 +396,7 @@ def main():
                         st.download_button(
                             label="推奨CPCリストをダウンロード (Excel)",
                             data=output.getvalue(),
-                            file_name='rpp_optimized_v6.xlsx',
+                            file_name='rpp_optimized_v7.xlsx',
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
 
