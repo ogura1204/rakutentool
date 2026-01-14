@@ -107,11 +107,8 @@ def get_shop_top_items(shop_code, shop_name, app_id, limit=30):
 
 # --- RPP改善用ロジック ---
 def get_current_price_for_rpp(item_manage_number, shop_code, app_id):
-    """商品管理番号とショップIDから現在の価格を取得"""
     url = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
-    # itemCodeは通常 shop_code:item_manage_number の形式
     item_code_param = f"{shop_code}:{item_manage_number}"
-    
     params = {
         "applicationId": app_id,
         "itemCode": item_code_param,
@@ -125,6 +122,56 @@ def get_current_price_for_rpp(item_manage_number, shop_code, app_id):
         return None
     except:
         return None
+
+def robust_read_file(uploaded_file):
+    """
+    あらゆる形式（CSV Shift-JIS, CSV UTF-8, Excel）を
+    なんとかしてDataFrameとして読み込む強力な関数
+    """
+    filename = uploaded_file.name.lower()
+    df = None
+    error_log = []
+
+    # 1. Excelファイルとしてトライ (.xlsx, .xls)
+    if filename.endswith('.xlsx') or filename.endswith('.xls'):
+        try:
+            uploaded_file.seek(0)
+            df = pd.read_excel(uploaded_file)
+            return df, None
+        except Exception as e:
+            error_log.append(f"Excel読み込み失敗: {e}")
+
+    # 2. CSVとしてトライ (複数のエンコーディングと設定を試す)
+    encodings = ['shift_jis', 'cp932', 'utf-8', 'utf-8-sig']
+    seps = [',', '\t', None] # カンマ、タブ、自動判定
+    
+    uploaded_file.seek(0)
+    
+    for enc in encodings:
+        for sep in seps:
+            try:
+                uploaded_file.seek(0)
+                # engine='python' は少し遅いが、エラーに強く自動判定が優秀
+                df = pd.read_csv(uploaded_file, encoding=enc, sep=sep, engine='python')
+                
+                # データが空でないか、列があるかチェック
+                if df is not None and len(df.columns) > 1:
+                    return df, None
+            except Exception as e:
+                pass # 失敗したら次へ
+
+    # 3. どうしてもダメな場合、メタデータ(最初の数行)を飛ばしてみる
+    for enc in encodings:
+        try:
+            uploaded_file.seek(0)
+            # 最初の5行を飛ばして読んでみる（RMSのレポートでたまにあるパターン）
+            df = pd.read_csv(uploaded_file, encoding=enc, skiprows=1, engine='python')
+            if df is not None and len(df.columns) > 1:
+                return df, None
+        except:
+            pass
+
+    return None, "すべての読み込み方法に失敗しました。ファイルが正しいか確認してください。"
 
 # --- Excel生成 ---
 def format_worksheet(worksheet):
@@ -259,16 +306,17 @@ def main():
         st.subheader("RPP広告 CPC自動最適化")
         st.markdown("""
         **手順:**
-        1. RMSからダウンロードした「パフォーマンスレポート(RPP)」のCSVをアップロード。
+        1. RMSからダウンロードした「パフォーマンスレポート(RPP)」のCSV(またはExcel)をアップロード。
         2. 自店舗のショップID(URLの英数字)を入力。
-        3. 目標ROASなどを設定して実行すると、現在の価格を取得して最適なCPCを提案します。
+        3. 実行すると、現在の価格を取得して最適なCPCを提案します。
         """)
 
         col1, col2 = st.columns(2)
         with col1:
             my_shop_code = st.text_input("自店舗ID (URLの英数字)", value="lykke-hygge", help="価格取得のために必要です。例: lykke-hygge")
         with col2:
-            uploaded_file = st.file_uploader("RPP実績CSVをアップロード", type=['csv'])
+            # Excelも許可するように変更
+            uploaded_file = st.file_uploader("RPP実績ファイル (CSV/Excel)", type=['csv', 'xlsx', 'xls'])
 
         # 設定エリア
         with st.expander("詳細設定", expanded=True):
@@ -279,29 +327,17 @@ def main():
 
         if st.button("価格取得＆改善実行", key="rpp_btn"):
             if not uploaded_file or not my_shop_code:
-                st.error("CSVファイルと自店舗IDは必須です。")
+                st.error("ファイルと自店舗IDは必須です。")
             else:
                 try:
-                    # --- 修正: 頑丈なCSV読み込みロジック ---
-                    df_rpp = None
-                    encodings = ['shift_jis', 'cp932', 'utf-8', 'utf-8-sig'] # 試行する文字コード順
-                    
-                    for enc in encodings:
-                        try:
-                            uploaded_file.seek(0) # 重要: 読み込み位置を必ず先頭にリセット
-                            df_rpp = pd.read_csv(uploaded_file, encoding=enc)
-                            break # 成功したらループを抜ける
-                        except:
-                            continue # 失敗したら次の文字コードへ
+                    # 頑丈な読み込み関数を使用
+                    df_rpp, error_msg = robust_read_file(uploaded_file)
                     
                     if df_rpp is None:
-                        st.error("CSVファイルの読み込みに失敗しました。ファイルが破損していないか、Excelで『CSV(UTF-8)』形式で保存し直して試してください。")
+                        st.error(f"ファイルの読み込みに失敗しました。\n詳細: {error_msg}")
                         st.stop()
-                    # -------------------------------------
                     
-                    st.write(f"読み込みデータ: {len(df_rpp)}件")
-                    
-                    # (以下、以前のロジックと同じ...)
+                    st.write(f"読み込み成功！ データ件数: {len(df_rpp)}件")
                     progress_rpp = st.progress(0)
                     status_rpp = st.empty()
                     results_rpp = []
@@ -309,7 +345,6 @@ def main():
                     total_rows = len(df_rpp)
                     
                     for index, row in df_rpp.iterrows():
-                        # ... (ここから下のループ処理は変更なし) ...
                         progress_rpp.progress((index + 1) / total_rows)
                         
                         # カラム名のゆらぎ対応
@@ -320,13 +355,21 @@ def main():
                         time.sleep(0.3) # API負荷軽減
                         
                         # ロジック
-                        current_cpc = row['実績CPC'] if '実績CPC' in row else 25
-                        roas = row['ROAS'] if 'ROAS' in row else 0
-                        clicks = row['クリック数'] if 'クリック数' in row else 0
+                        current_cpc = row.get('実績CPC', 25)
+                        roas = row.get('ROAS', 0)
+                        clicks = row.get('クリック数', 0)
                         
                         new_cpc = current_cpc
                         reason = "維持"
                         
+                        # 数値型への変換を試みる（文字列で入っている場合対策）
+                        try:
+                            current_cpc = float(current_cpc)
+                            roas = float(roas)
+                            clicks = int(clicks)
+                        except:
+                            pass # 変換できなければそのまま
+
                         if roas == 0 and clicks > 20:
                             new_cpc = max(min_cpc, current_cpc - 10)
                             reason = "クリック過多・売上なし"
@@ -361,7 +404,7 @@ def main():
                     )
 
                 except Exception as e:
-                    st.error(f"エラー: {e}")
+                    st.error(f"予期せぬエラー: {e}")
 
 if __name__ == "__main__":
     main()
