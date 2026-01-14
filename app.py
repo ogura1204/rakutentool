@@ -108,7 +108,9 @@ def get_shop_top_items(shop_code, shop_name, app_id, limit=30):
 # --- RPP改善用ロジック ---
 def get_current_price_for_rpp(item_manage_number, shop_code, app_id):
     url = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
+    # itemCodeは通常 shop_code:item_manage_number の形式
     item_code_param = f"{shop_code}:{item_manage_number}"
+    
     params = {
         "applicationId": app_id,
         "itemCode": item_code_param,
@@ -122,69 +124,6 @@ def get_current_price_for_rpp(item_manage_number, shop_code, app_id):
         return None
     except:
         return None
-
-def find_header_row(df):
-    """
-    データフレームの上部をスキャンし、RPPレポートの本当のヘッダー行を探す
-    """
-    # 探したい重要キーワード
-    target_cols = ['商品管理番号', '実績CPC', 'ROAS', '商品URL', '実績商品']
-    
-    # すでにヘッダーが正しい場合
-    for col in df.columns:
-        if str(col).strip() in target_cols:
-            return df
-
-    # 上から順に行の中身を見ていく
-    for i in range(min(20, len(df))): # 最初の20行だけチェック
-        row_values = [str(x).strip() for x in df.iloc[i].values]
-        # その行の中にキーワードが含まれていれば、そこがヘッダー
-        if any(t in row_values for t in target_cols):
-            # 新しいヘッダーを設定して、それより下のデータを返す
-            new_header = df.iloc[i]
-            df_new = df[i+1:].copy()
-            df_new.columns = new_header
-            return df_new.reset_index(drop=True)
-            
-    return df
-
-def robust_read_file(uploaded_file):
-    filename = uploaded_file.name.lower()
-    df = None
-    error_log = []
-
-    # 1. Excelファイルとしてトライ
-    if filename.endswith('.xlsx') or filename.endswith('.xls'):
-        try:
-            uploaded_file.seek(0)
-            df = pd.read_excel(uploaded_file)
-        except Exception as e:
-            error_log.append(f"Excel読み込み失敗: {e}")
-
-    # 2. CSVとしてトライ
-    if df is None:
-        encodings = ['shift_jis', 'cp932', 'utf-8', 'utf-8-sig']
-        seps = [',', '\t', None]
-        
-        uploaded_file.seek(0)
-        for enc in encodings:
-            for sep in seps:
-                try:
-                    uploaded_file.seek(0)
-                    df = pd.read_csv(uploaded_file, encoding=enc, sep=sep, engine='python')
-                    if df is not None and len(df.columns) > 1:
-                        break
-                except:
-                    continue
-            if df is not None: break
-
-    if df is None:
-        return None, "ファイルの形式が不明です。CSVまたはExcelか確認してください。"
-
-    # ヘッダー位置の自動修正
-    df_clean = find_header_row(df)
-    
-    return df_clean, None
 
 # --- Excel生成 ---
 def format_worksheet(worksheet):
@@ -331,32 +270,53 @@ def main():
             uploaded_file = st.file_uploader("RPP実績ファイル (CSV/Excel)", type=['csv', 'xlsx', 'xls'])
 
         # 設定エリア
-        with st.expander("詳細設定", expanded=True):
-            c1, c2, c3 = st.columns(3)
+        with st.expander("詳細設定・読み込み設定", expanded=True):
+            c1, c2, c3, c4 = st.columns(4)
             target_roas = c1.number_input("目標ROAS (%)", min_value=100, value=400, step=50)
             min_cpc = c2.number_input("最低CPC (円)", min_value=10, value=25)
             max_cpc = c3.number_input("最高CPC (円)", min_value=10, value=100)
+            # ★ここ重要: ユーザーが自分で「何行目か」を調整できるようにしました
+            skip_rows_num = c4.number_input("ヘッダー開始行(調整用)", min_value=1, value=8, help="CSVの何行目に項目名(実績CPCなど)があるか指定してください。通常は8行目です。")
 
         if st.button("価格取得＆改善実行", key="rpp_btn"):
             if not uploaded_file or not my_shop_code:
                 st.error("ファイルと自店舗IDは必須です。")
             else:
                 try:
-                    # 頑丈な読み込み関数を使用
-                    df_rpp, error_msg = robust_read_file(uploaded_file)
+                    df_rpp = None
+                    skip_rows_count = skip_rows_num - 1 # プログラムは0始まりなので-1する
+
+                    # 1. Excelの場合
+                    if uploaded_file.name.endswith('.xlsx') or uploaded_file.name.endswith('.xls'):
+                        uploaded_file.seek(0)
+                        try:
+                            df_rpp = pd.read_excel(uploaded_file, skiprows=skip_rows_count)
+                        except:
+                            st.error("Excelの読み込みに失敗しました。")
+                            st.stop()
+                    
+                    # 2. CSVの場合
+                    else:
+                        encodings = ['shift_jis', 'cp932', 'utf-8', 'utf-8-sig']
+                        for enc in encodings:
+                            try:
+                                uploaded_file.seek(0)
+                                df_rpp = pd.read_csv(uploaded_file, encoding=enc, skiprows=skip_rows_count)
+                                if len(df_rpp.columns) > 1:
+                                    break
+                            except:
+                                continue
                     
                     if df_rpp is None:
-                        st.error(f"ファイルの読み込みに失敗しました。\n詳細: {error_msg}")
+                        st.error(f"ファイルの読み込みに失敗しました。CSVの形式を確認してください。")
                         st.stop()
                     
-                    # カラムチェック
-                    expected_cols = ['商品管理番号', '実績CPC', 'クリック数', 'ROAS']
-                    found_cols = [c for c in expected_cols if c in df_rpp.columns]
-                    
-                    # 少なくとも「商品管理番号」か「商品URL」がないと処理できない
-                    if '商品管理番号' not in df_rpp.columns and '商品URL' not in df_rpp.columns:
-                        st.error(f"有効なデータ列が見つかりませんでした。\n検出された列名: {list(df_rpp.columns)}\nファイルがRPPレポートか確認してください。")
-                        st.stop()
+                    # カラムチェック (ゆらぎ対応)
+                    # 必要なカラムが含まれているか確認
+                    check_cols = str(list(df_rpp.columns))
+                    if '商品管理番号' not in check_cols and '商品URL' not in check_cols:
+                         st.error(f"データが見つかりません。「ヘッダー開始行」の設定({skip_rows_num}行目)がずれている可能性があります。\n読み込んだ列名: {check_cols}")
+                         st.stop()
 
                     st.write(f"読み込み成功！ データ件数: {len(df_rpp)}件")
                     progress_rpp = st.progress(0)
@@ -370,12 +330,10 @@ def main():
                         
                         # カラム名のゆらぎ対応
                         item_manage_number = row.get('商品管理番号', row.get('商品URL', ''))
-                        if pd.isna(item_manage_number): item_manage_number = ""
+                        if pd.isna(item_manage_number): continue
                         item_manage_number = str(item_manage_number).strip()
                         
-                        # 商品管理番号が空ならスキップ
-                        if not item_manage_number:
-                            continue
+                        if not item_manage_number: continue
 
                         # 価格取得
                         current_price = get_current_price_for_rpp(item_manage_number, my_shop_code, APP_ID)
