@@ -10,13 +10,13 @@ from openpyxl.styles import Alignment, PatternFill, Font
 from openpyxl.utils import get_column_letter
 
 # ▼▼▼ 設定エリア ▼▼▼
-# ここに設定したIDが自動で使用されます
+# ユーザー様のアプリID
 APP_ID = '1052224946268447244' 
 REVIEW_RATE = 0.08  
 PRICE_UPLIFT = 1.2  
 
 # --- ページ設定 ---
-st.set_page_config(page_title="楽天市場 運営支援ツール Suite v5", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="楽天市場 運営支援ツール Suite v6", page_icon="🛍️", layout="wide")
 
 # --- CSSスタイル ---
 st.markdown("""
@@ -108,33 +108,42 @@ def get_shop_top_items(shop_code, shop_name, limit=30):
 
 # --- RPP改善用ロジック ---
 def get_current_price_for_rpp(item_manage_number, shop_code):
+    """
+    修正版: itemCode指定ではなく、shopCode + keyword指定で検索する。
+    これによりAPIエラー400を回避しやすくなる。
+    """
     url = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
     
-    # 修正: 商品管理番号に既にショップコードが含まれている場合の対策
-    if ":" in item_manage_number:
-        # すでに "lykke-hygge:abc-123" のようになっている場合
-        item_code_param = item_manage_number
-    else:
-        # "abc-123" の場合
-        item_code_param = f"{shop_code}:{item_manage_number}"
-    
+    # 商品管理番号から余計な文字列を除去（念のため）
+    keyword = str(item_manage_number).strip()
+    if ":" in keyword:
+        # "lykke-hygge:abc-123" となっている場合、後半だけ取り出す
+        keyword = keyword.split(":")[-1]
+
     params = {
         "applicationId": APP_ID,
-        "itemCode": item_code_param,
+        "shopCode": shop_code,
+        "keyword": keyword, # 商品管理番号をキーワードとして検索
         "hits": 1
     }
+    
     try:
         res = requests.get(url, params=params, timeout=5)
-        if res.status_code != 200:
-            return None, f"APIエラー({res.status_code})"
-            
         data = res.json()
-        if 'Items' in data and len(data['Items']) > 0:
-            return data['Items'][0]['Item']['itemPrice'], "成功"
+        
+        if res.status_code == 200:
+            if 'Items' in data and len(data['Items']) > 0:
+                return data['Items'][0]['Item']['itemPrice'], "成功"
+            else:
+                return None, "該当なし"
         else:
-            return None, "該当なし"
+            # エラー詳細を取得
+            error_desc = data.get('error_description', '')
+            error_msg = data.get('error', '')
+            return None, f"APIエラー({res.status_code}): {error_desc} {error_msg}"
+            
     except Exception as e:
-        return None, f"通信エラー: {str(e)}"
+        return None, f"通信エラー"
 
 # --- ヘルパー関数: データクリーニング ---
 def clean_number(val, default_val=0):
@@ -180,9 +189,9 @@ def format_worksheet(worksheet):
 # メインアプリケーション
 # ==========================================
 def main():
-    st.title("楽天市場 運営支援ツール Suite v5")
+    st.title("楽天市場 運営支援ツール Suite v6")
     
-    # アプリID入力欄を削除（定数を使用）
+    # 共通ID設定（内部）
     
     tab1, tab2 = st.tabs(["📊 競合分析ツール", "💰 RPP広告改善ツール"])
 
@@ -279,7 +288,8 @@ def main():
             target_roas = c1.number_input("目標ROAS (%)", min_value=100, value=400, step=50)
             min_cpc = c2.number_input("最低CPC (円)", min_value=10, value=25)
             max_cpc = c3.number_input("最高CPC (円)", min_value=10, value=100)
-            skip_rows_num = c4.number_input("ヘッダー開始行", min_value=1, value=8, help="通常は8行目です。")
+            # ★修正: デフォルトを7行目に設定
+            skip_rows_num = c4.number_input("ヘッダー開始行", min_value=1, value=7, help="通常は7行目または8行目です。")
 
         if st.button("価格取得＆改善実行", key="rpp_btn"):
             if not uploaded_file or not my_shop_code:
@@ -308,8 +318,7 @@ def main():
                         st.error(f"読み込み失敗。ヘッダー開始行({skip_rows_num}行目)が正しいか確認してください。")
                         st.stop()
                     
-                    # --- 2. 列名の正規化（ゆらぎ吸収） ---
-                    # ユーザーのCSVにある可能性が高い列名を探す
+                    # --- 2. 列名の正規化 ---
                     col_map = {}
                     
                     # 商品管理番号
@@ -332,7 +341,7 @@ def main():
                         st.error(f"「商品管理番号」列が見つかりません。読み込んだ列名: {list(df_rpp.columns)}")
                         st.stop()
 
-                    st.write(f"データ件数: {len(df_rpp)}件 / 検出列: {col_map}")
+                    st.write(f"データ件数: {len(df_rpp)}件 / 読み取り列: {col_map}")
                     
                     progress_rpp = st.progress(0)
                     results_rpp = []
@@ -345,7 +354,7 @@ def main():
                         item_manage_number = str(row[col_map['item_code']]).strip()
                         if not item_manage_number or item_manage_number.lower() == 'nan': continue
                         
-                        # 数値取得（クリーニング付き）
+                        # 数値取得
                         current_cpc = clean_number(row.get(col_map.get('cpc')), default_val=25)
                         roas = clean_number(row.get(col_map.get('roas')), default_val=0)
                         clicks = int(clean_number(row.get(col_map.get('clicks')), default_val=0))
@@ -394,7 +403,7 @@ def main():
                         st.download_button(
                             label="推奨CPCリストをダウンロード (Excel)",
                             data=output.getvalue(),
-                            file_name='rpp_optimized_v5.xlsx',
+                            file_name='rpp_optimized_v6.xlsx',
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
 
