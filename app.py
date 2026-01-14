@@ -10,12 +10,13 @@ from openpyxl.styles import Alignment, PatternFill, Font
 from openpyxl.utils import get_column_letter
 
 # ▼▼▼ 設定エリア ▼▼▼
-DEFAULT_APP_ID = '1052224946268447244' 
+# ここに設定したIDが自動で使用されます
+APP_ID = '1052224946268447244' 
 REVIEW_RATE = 0.08  
 PRICE_UPLIFT = 1.2  
 
 # --- ページ設定 ---
-st.set_page_config(page_title="楽天市場 運営支援ツール Suite v4.1", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="楽天市場 運営支援ツール Suite v5", page_icon="🛍️", layout="wide")
 
 # --- CSSスタイル ---
 st.markdown("""
@@ -62,7 +63,7 @@ def calculate_metrics(item, uplift, rate):
         "商品URL": item['itemUrl'], "ジャンルID": item['genreId']
     }
 
-def search_items(query, app_id, limit=10):
+def search_items(query, limit=10):
     url = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
     if "http" in query:
         keyword = get_item_key_from_url(query)
@@ -74,7 +75,7 @@ def search_items(query, app_id, limit=10):
         keyword = query
         search_type = "ワード検索"
 
-    params = {"applicationId": app_id, "keyword": keyword, "hits": limit, "sort": "-reviewCount", "availability": 1}
+    params = {"applicationId": APP_ID, "keyword": keyword, "hits": limit, "sort": "-reviewCount", "availability": 1}
     try:
         time.sleep(0.5)
         res = requests.get(url, params=params, timeout=10)
@@ -89,9 +90,9 @@ def search_items(query, app_id, limit=10):
         return results
     except: return []
 
-def get_shop_top_items(shop_code, shop_name, app_id, limit=30):
+def get_shop_top_items(shop_code, shop_name, limit=30):
     url = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
-    params = {"applicationId": app_id, "shopCode": shop_code, "hits": limit, "sort": "-reviewCount", "availability": 1}
+    params = {"applicationId": APP_ID, "shopCode": shop_code, "hits": limit, "sort": "-reviewCount", "availability": 1}
     try:
         time.sleep(0.5)
         res = requests.get(url, params=params, timeout=10)
@@ -106,11 +107,19 @@ def get_shop_top_items(shop_code, shop_name, app_id, limit=30):
     except: return []
 
 # --- RPP改善用ロジック ---
-def get_current_price_for_rpp(item_manage_number, shop_code, app_id):
+def get_current_price_for_rpp(item_manage_number, shop_code):
     url = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
-    item_code_param = f"{shop_code}:{item_manage_number}"
+    
+    # 修正: 商品管理番号に既にショップコードが含まれている場合の対策
+    if ":" in item_manage_number:
+        # すでに "lykke-hygge:abc-123" のようになっている場合
+        item_code_param = item_manage_number
+    else:
+        # "abc-123" の場合
+        item_code_param = f"{shop_code}:{item_manage_number}"
+    
     params = {
-        "applicationId": app_id,
+        "applicationId": APP_ID,
         "itemCode": item_code_param,
         "hits": 1
     }
@@ -127,27 +136,16 @@ def get_current_price_for_rpp(item_manage_number, shop_code, app_id):
     except Exception as e:
         return None, f"通信エラー: {str(e)}"
 
-# --- ヘルパー関数: 列名のあいまい検索 ---
-def find_col_value(row, candidates, default_val=0):
-    for col in candidates:
-        if col in row.index:
-            val = row[col]
-            try:
-                if pd.isna(val): continue
-                s_val = str(val).replace(',', '').replace('円', '').replace('%', '').strip()
-                if s_val == '': continue
-                return float(s_val)
-            except:
-                continue
-    return default_val
-
-def find_col_str(row, candidates, default_val=""):
-    for col in candidates:
-        if col in row.index:
-            val = row[col]
-            if pd.isna(val): continue
-            return str(val).strip()
-    return default_val
+# --- ヘルパー関数: データクリーニング ---
+def clean_number(val, default_val=0):
+    """円、カンマ、%を取り除いて数値にする"""
+    if pd.isna(val): return default_val
+    s_val = str(val).replace(',', '').replace('円', '').replace('%', '').strip()
+    if s_val == '' or s_val.lower() == 'nan': return default_val
+    try:
+        return float(s_val)
+    except:
+        return default_val
 
 # --- Excel生成 ---
 def format_worksheet(worksheet):
@@ -182,12 +180,10 @@ def format_worksheet(worksheet):
 # メインアプリケーション
 # ==========================================
 def main():
-    st.title("楽天市場 運営支援ツール Suite v4.1")
+    st.title("楽天市場 運営支援ツール Suite v5")
     
-    st.sidebar.header("⚙️ 共通設定")
-    user_app_id = st.sidebar.text_input("楽天アプリID (任意)", value="", type="password", help="空欄の場合はデフォルトIDを使用")
-    APP_ID = user_app_id if user_app_id else DEFAULT_APP_ID
-
+    # アプリID入力欄を削除（定数を使用）
+    
     tab1, tab2 = st.tabs(["📊 競合分析ツール", "💰 RPP広告改善ツール"])
 
     # -----------------------------------
@@ -215,7 +211,7 @@ def main():
                     for i, target in enumerate(target_list):
                         q = target['query']
                         status_text.text(f"検索中 ({i+1}/{total}): {q}")
-                        items = search_items(q, APP_ID, limit=10)
+                        items = search_items(q, limit=10)
                         sheet1_data.extend(items)
                         for item in items:
                             if item['ショップコード'] not in analyzed_shops:
@@ -230,7 +226,7 @@ def main():
                     
                     for i, s_code in enumerate(analyzed_shops):
                         s_name = shop_map.get(s_code, "不明")
-                        shop_items = get_shop_top_items(s_code, s_name, APP_ID, limit=30)
+                        shop_items = get_shop_top_items(s_code, s_name, limit=30)
                         sheet2_data.extend(shop_items)
                         current_progress = 40 + int((i+1) / max(1, total_shops) * 60)
                         progress_bar.progress(min(100, current_progress))
@@ -270,25 +266,20 @@ def main():
     # -----------------------------------
     with tab2:
         st.subheader("RPP広告 CPC自動最適化")
-        st.markdown("""
-        **手順:**
-        1. RMSからダウンロードしたパフォーマンスレポート(CSV/Excel)をアップロード。
-        2. 自店舗のショップIDを入力。
-        3. **「ヘッダー開始行」の数字を調整してください**（読み込みエラーになる場合）。
-        """)
+        st.markdown("RMSのパフォーマンスレポートをアップロードしてください。")
 
         col1, col2 = st.columns(2)
         with col1:
             my_shop_code = st.text_input("自店舗ID (URLの英数字)", value="lykke-hygge", help="例: lykke-hygge")
         with col2:
-            uploaded_file = st.file_uploader("RPP実績ファイル", type=['csv', 'xlsx', 'xls'])
+            uploaded_file = st.file_uploader("RPP実績ファイル (CSV/Excel)", type=['csv', 'xlsx', 'xls'])
 
-        with st.expander("詳細設定・読み込み設定", expanded=True):
+        with st.expander("詳細設定", expanded=True):
             c1, c2, c3, c4 = st.columns(4)
             target_roas = c1.number_input("目標ROAS (%)", min_value=100, value=400, step=50)
             min_cpc = c2.number_input("最低CPC (円)", min_value=10, value=25)
             max_cpc = c3.number_input("最高CPC (円)", min_value=10, value=100)
-            skip_rows_num = c4.number_input("ヘッダー開始行", min_value=1, value=8, help="項目名（商品管理番号など）が書かれている行数を指定。")
+            skip_rows_num = c4.number_input("ヘッダー開始行", min_value=1, value=8, help="通常は8行目です。")
 
         if st.button("価格取得＆改善実行", key="rpp_btn"):
             if not uploaded_file or not my_shop_code:
@@ -298,7 +289,7 @@ def main():
                     df_rpp = None
                     skip_rows_count = skip_rows_num - 1 
 
-                    # 1. 読み込み処理
+                    # --- 1. 読み込み ---
                     if uploaded_file.name.endswith('.xlsx') or uploaded_file.name.endswith('.xls'):
                         uploaded_file.seek(0)
                         try:
@@ -314,18 +305,34 @@ def main():
                             except: continue
                     
                     if df_rpp is None:
-                        st.error(f"読み込み失敗。ヘッダー開始行の数字を変えて試してください。")
+                        st.error(f"読み込み失敗。ヘッダー開始行({skip_rows_num}行目)が正しいか確認してください。")
                         st.stop()
                     
-                    st.info(f"読み込んだ列名: {list(df_rpp.columns)}")
+                    # --- 2. 列名の正規化（ゆらぎ吸収） ---
+                    # ユーザーのCSVにある可能性が高い列名を探す
+                    col_map = {}
                     
-                    # 列マッピング
-                    col_mapping = {
-                        'item_code': ['商品管理番号', '商品URL', 'item_code', 'management_no'],
-                        'cpc': ['実績CPC', 'クリック単価', 'CPC', '平均CPC', 'クリック単価(円)'],
-                        'roas': ['ROAS', 'ROAS(%)', '売上対広告費比率'],
-                        'clicks': ['クリック数', 'Clicks', 'クリック'],
-                    }
+                    # 商品管理番号
+                    for c in ['商品管理番号', '商品URL', 'item_code', 'management_no']:
+                        if c in df_rpp.columns: col_map['item_code'] = c; break
+                    
+                    # 実績CPC
+                    for c in ['実績CPC', 'クリック単価', 'CPC', '平均CPC', 'クリック単価(円)']:
+                        if c in df_rpp.columns: col_map['cpc'] = c; break
+                    
+                    # ROAS
+                    for c in ['ROAS', 'ROAS(%)', '売上対広告費比率']:
+                        if c in df_rpp.columns: col_map['roas'] = c; break
+                    
+                    # クリック数
+                    for c in ['クリック数', 'Clicks', 'クリック']:
+                        if c in df_rpp.columns: col_map['clicks'] = c; break
+                    
+                    if 'item_code' not in col_map:
+                        st.error(f"「商品管理番号」列が見つかりません。読み込んだ列名: {list(df_rpp.columns)}")
+                        st.stop()
+
+                    st.write(f"データ件数: {len(df_rpp)}件 / 検出列: {col_map}")
                     
                     progress_rpp = st.progress(0)
                     results_rpp = []
@@ -334,16 +341,20 @@ def main():
                     for index, row in df_rpp.iterrows():
                         progress_rpp.progress((index + 1) / total_rows)
                         
-                        item_manage_number = find_col_str(row, col_mapping['item_code'])
-                        if not item_manage_number or item_manage_number == "nan": continue
+                        # 商品コード
+                        item_manage_number = str(row[col_map['item_code']]).strip()
+                        if not item_manage_number or item_manage_number.lower() == 'nan': continue
                         
-                        current_cpc = find_col_value(row, col_mapping['cpc'], default_val=25)
-                        roas = find_col_value(row, col_mapping['roas'], default_val=0)
-                        clicks = int(find_col_value(row, col_mapping['clicks'], default_val=0))
+                        # 数値取得（クリーニング付き）
+                        current_cpc = clean_number(row.get(col_map.get('cpc')), default_val=25)
+                        roas = clean_number(row.get(col_map.get('roas')), default_val=0)
+                        clicks = int(clean_number(row.get(col_map.get('clicks')), default_val=0))
                         
-                        current_price, status_msg = get_current_price_for_rpp(item_manage_number, my_shop_code, APP_ID)
+                        # APIで価格取得
+                        current_price, status_msg = get_current_price_for_rpp(item_manage_number, my_shop_code)
                         time.sleep(0.3)
                         
+                        # ロジック
                         new_cpc = current_cpc
                         reason = "維持"
                         
@@ -369,10 +380,10 @@ def main():
                         })
                     
                     if not results_rpp:
-                        st.warning("有効なデータ行が見つかりませんでした。")
+                        st.warning("処理できるデータがありませんでした。")
                     else:
                         df_res = pd.DataFrame(results_rpp)
-                        st.success(f"計算完了！ {len(df_res)}件処理しました。")
+                        st.success("完了しました！")
                         st.dataframe(df_res)
                         
                         output = io.BytesIO()
@@ -383,7 +394,7 @@ def main():
                         st.download_button(
                             label="推奨CPCリストをダウンロード (Excel)",
                             data=output.getvalue(),
-                            file_name='rpp_optimized_v4.xlsx',
+                            file_name='rpp_optimized_v5.xlsx',
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
 
