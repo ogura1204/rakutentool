@@ -282,13 +282,26 @@ def main():
                 st.error("CSVファイルと自店舗IDは必須です。")
             else:
                 try:
-                    # CSV読み込み
-                    try:
-                        df_rpp = pd.read_csv(uploaded_file, encoding='shift_jis')
-                    except:
-                        df_rpp = pd.read_csv(uploaded_file, encoding='utf-8')
+                    # --- 修正: 頑丈なCSV読み込みロジック ---
+                    df_rpp = None
+                    encodings = ['shift_jis', 'cp932', 'utf-8', 'utf-8-sig'] # 試行する文字コード順
+                    
+                    for enc in encodings:
+                        try:
+                            uploaded_file.seek(0) # 重要: 読み込み位置を必ず先頭にリセット
+                            df_rpp = pd.read_csv(uploaded_file, encoding=enc)
+                            break # 成功したらループを抜ける
+                        except:
+                            continue # 失敗したら次の文字コードへ
+                    
+                    if df_rpp is None:
+                        st.error("CSVファイルの読み込みに失敗しました。ファイルが破損していないか、Excelで『CSV(UTF-8)』形式で保存し直して試してください。")
+                        st.stop()
+                    # -------------------------------------
                     
                     st.write(f"読み込みデータ: {len(df_rpp)}件")
+                    
+                    # (以下、以前のロジックと同じ...)
                     progress_rpp = st.progress(0)
                     status_rpp = st.empty()
                     results_rpp = []
@@ -296,6 +309,7 @@ def main():
                     total_rows = len(df_rpp)
                     
                     for index, row in df_rpp.iterrows():
+                        # ... (ここから下のループ処理は変更なし) ...
                         progress_rpp.progress((index + 1) / total_rows)
                         
                         # カラム名のゆらぎ対応
