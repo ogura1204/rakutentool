@@ -108,13 +108,7 @@ def get_shop_top_items(shop_code, shop_name, app_id, limit=30):
 # --- RPP改善用ロジック ---
 def get_current_price_for_rpp(item_manage_number, shop_code, app_id):
     url = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
-    # itemCodeは通常 shop_code:item_manage_number の形式
-    # 商品管理番号にshop_codeが含まれていないか確認
-    if shop_code in item_manage_number:
-        item_code_param = item_manage_number
-    else:
-        item_code_param = f"{shop_code}:{item_manage_number}"
-    
+    item_code_param = f"{shop_code}:{item_manage_number}"
     params = {
         "applicationId": app_id,
         "itemCode": item_code_param,
@@ -129,76 +123,68 @@ def get_current_price_for_rpp(item_manage_number, shop_code, app_id):
     except:
         return None
 
-def smart_read_file(uploaded_file):
+def find_header_row(df):
     """
-    楽天RPPレポート特有の「上部にメタデータがあるCSV/Excel」を
-    自動でヘッダー位置を特定して読み込む関数
+    データフレームの上部をスキャンし、RPPレポートの本当のヘッダー行を探す
     """
+    # 探したい重要キーワード
+    target_cols = ['商品管理番号', '実績CPC', 'ROAS', '商品URL', '実績商品']
+    
+    # すでにヘッダーが正しい場合
+    for col in df.columns:
+        if str(col).strip() in target_cols:
+            return df
+
+    # 上から順に行の中身を見ていく
+    for i in range(min(20, len(df))): # 最初の20行だけチェック
+        row_values = [str(x).strip() for x in df.iloc[i].values]
+        # その行の中にキーワードが含まれていれば、そこがヘッダー
+        if any(t in row_values for t in target_cols):
+            # 新しいヘッダーを設定して、それより下のデータを返す
+            new_header = df.iloc[i]
+            df_new = df[i+1:].copy()
+            df_new.columns = new_header
+            return df_new.reset_index(drop=True)
+            
+    return df
+
+def robust_read_file(uploaded_file):
     filename = uploaded_file.name.lower()
-    target_keywords = ["商品管理番号", "コントロールカラム", "入札単価"] # ヘッダーに含まれるはずの言葉
-    
-    # ---------------------------
-    # 1. Excelの場合
-    # ---------------------------
-    if filename.endswith(('.xlsx', '.xls')):
+    df = None
+    error_log = []
+
+    # 1. Excelファイルとしてトライ
+    if filename.endswith('.xlsx') or filename.endswith('.xls'):
         try:
             uploaded_file.seek(0)
-            # 最初の30行だけ読んで場所を探す
-            df_temp = pd.read_excel(uploaded_file, header=None, nrows=30)
-            
-            header_idx = -1
-            for idx, row in df_temp.iterrows():
-                row_str = " ".join(row.astype(str).values)
-                if any(kw in row_str for kw in target_keywords):
-                    header_idx = idx
-                    break
-            
-            uploaded_file.seek(0)
-            if header_idx != -1:
-                return pd.read_excel(uploaded_file, header=header_idx), None
-            else:
-                return pd.read_excel(uploaded_file), None # 見つからなければ普通に読む
+            df = pd.read_excel(uploaded_file)
         except Exception as e:
-            return None, f"Excel読込エラー: {e}"
+            error_log.append(f"Excel読み込み失敗: {e}")
 
-    # ---------------------------
-    # 2. CSVの場合
-    # ---------------------------
-    encodings = ['shift_jis', 'cp932', 'utf-8', 'utf-8-sig']
+    # 2. CSVとしてトライ
+    if df is None:
+        encodings = ['shift_jis', 'cp932', 'utf-8', 'utf-8-sig']
+        seps = [',', '\t', None]
+        
+        uploaded_file.seek(0)
+        for enc in encodings:
+            for sep in seps:
+                try:
+                    uploaded_file.seek(0)
+                    df = pd.read_csv(uploaded_file, encoding=enc, sep=sep, engine='python')
+                    if df is not None and len(df.columns) > 1:
+                        break
+                except:
+                    continue
+            if df is not None: break
+
+    if df is None:
+        return None, "ファイルの形式が不明です。CSVまたはExcelか確認してください。"
+
+    # ヘッダー位置の自動修正
+    df_clean = find_header_row(df)
     
-    for enc in encodings:
-        try:
-            uploaded_file.seek(0)
-            # 最初の4KB程度を読み込んでテキスト解析
-            content_snippet = uploaded_file.read(4096).decode(enc, errors='ignore')
-            lines = content_snippet.splitlines()
-            
-            header_idx = -1
-            for i, line in enumerate(lines):
-                if any(kw in line for kw in target_keywords):
-                    header_idx = i
-                    break
-            
-            uploaded_file.seek(0)
-            if header_idx != -1:
-                # header=i で指定。skip_blank_lines=Falseにしないと行数がずれることがあるが、
-                # read_csvのheader指定は「有効なデータ行」ではなく「ファイルの行数(0始まり)」なので
-                # 素直に指定すれば大体動く。念のため engine='python' 推奨。
-                df = pd.read_csv(uploaded_file, encoding=enc, header=header_idx, engine='python')
-                return df, None
-            
-        except Exception:
-            continue
-            
-    # スマート検知で失敗した場合の最終手段: 普通に読む
-    for enc in encodings:
-        try:
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, encoding=enc, engine='python')
-            if len(df.columns) > 3: return df, None
-        except: pass
-
-    return None, "ヘッダーが見つかりませんでした。ファイルがRPPレポートか確認してください。"
+    return df_clean, None
 
 # --- Excel生成 ---
 def format_worksheet(worksheet):
@@ -237,12 +223,8 @@ def create_excel_bytes(df1, df2):
     cols1 = ['検索タイプ', '検索条件', '商品名', '価格', 'レビュー総数', '推定累積販売数', '推定累積売上', 'ポイント倍率', 'クーポン有無', 'ショップ名', '商品URL']
     cols2 = ['対象店舗', '商品名', '価格', 'レビュー総数', '推定累積販売数', '推定累積売上', 'ポイント倍率', 'クーポン有無', '商品URL']
     
-    # 存在しないカラムを除外してreindex
-    valid_cols1 = [c for c in cols1 if c in df1.columns]
-    valid_cols2 = [c for c in cols2 if c in df2.columns]
-    
-    df1 = df1.reindex(columns=valid_cols1) if not df1.empty else pd.DataFrame()
-    df2 = df2.reindex(columns=valid_cols2) if not df2.empty else pd.DataFrame()
+    df1 = df1.reindex(columns=cols1) if not df1.empty else pd.DataFrame()
+    df2 = df2.reindex(columns=cols2) if not df2.empty else pd.DataFrame()
 
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df1.empty:
@@ -360,13 +342,22 @@ def main():
                 st.error("ファイルと自店舗IDは必須です。")
             else:
                 try:
-                    # スマート読み込み
-                    df_rpp, error_msg = smart_read_file(uploaded_file)
+                    # 頑丈な読み込み関数を使用
+                    df_rpp, error_msg = robust_read_file(uploaded_file)
                     
                     if df_rpp is None:
                         st.error(f"ファイルの読み込みに失敗しました。\n詳細: {error_msg}")
                         st.stop()
                     
+                    # カラムチェック
+                    expected_cols = ['商品管理番号', '実績CPC', 'クリック数', 'ROAS']
+                    found_cols = [c for c in expected_cols if c in df_rpp.columns]
+                    
+                    # 少なくとも「商品管理番号」か「商品URL」がないと処理できない
+                    if '商品管理番号' not in df_rpp.columns and '商品URL' not in df_rpp.columns:
+                        st.error(f"有効なデータ列が見つかりませんでした。\n検出された列名: {list(df_rpp.columns)}\nファイルがRPPレポートか確認してください。")
+                        st.stop()
+
                     st.write(f"読み込み成功！ データ件数: {len(df_rpp)}件")
                     progress_rpp = st.progress(0)
                     status_rpp = st.empty()
@@ -378,23 +369,35 @@ def main():
                         progress_rpp.progress((index + 1) / total_rows)
                         
                         # カラム名のゆらぎ対応
-                        item_manage_number = row.get('商品管理番号', row.get('商品URL', '')).strip()
-                        if pd.isna(item_manage_number) or item_manage_number == "":
-                            continue # 空行スキップ
+                        item_manage_number = row.get('商品管理番号', row.get('商品URL', ''))
+                        if pd.isna(item_manage_number): item_manage_number = ""
+                        item_manage_number = str(item_manage_number).strip()
+                        
+                        # 商品管理番号が空ならスキップ
+                        if not item_manage_number:
+                            continue
 
                         # 価格取得
                         current_price = get_current_price_for_rpp(item_manage_number, my_shop_code, APP_ID)
                         time.sleep(0.3) # API負荷軽減
                         
-                        # 数値取得とクリーニング
+                        # ロジック
+                        current_cpc = row.get('実績CPC', 25)
+                        roas = row.get('ROAS', 0)
+                        clicks = row.get('クリック数', 0)
+                        
+                        # 数値変換とクリーニング
                         try:
-                            current_cpc = float(row.get('実績CPC', row.get('入札単価', 25)))
-                            roas = float(row.get('ROAS', 0))
-                            clicks = int(row.get('クリック数', 0))
+                            if pd.isna(current_cpc): current_cpc = 25
+                            else: current_cpc = float(str(current_cpc).replace(',', '').replace('円', ''))
+                            
+                            if pd.isna(roas): roas = 0
+                            else: roas = float(str(roas).replace('%', '').replace(',', ''))
+                            
+                            if pd.isna(clicks): clicks = 0
+                            else: clicks = int(str(clicks).replace(',', ''))
                         except:
-                            current_cpc = 25.0
-                            roas = 0.0
-                            clicks = 0
+                            pass 
 
                         new_cpc = current_cpc
                         reason = "維持"
@@ -412,7 +415,7 @@ def main():
                         results_rpp.append({
                             "商品管理番号": item_manage_number,
                             "現在価格": current_price if current_price else "取得失敗",
-                            "実績CPC": int(current_cpc),
+                            "実績CPC": current_cpc,
                             "推奨CPC": int(new_cpc),
                             "変更理由": reason,
                             "ROAS": roas,
@@ -420,21 +423,20 @@ def main():
                         })
                     
                     if not results_rpp:
-                        st.warning("有効なデータが見つかりませんでした。")
-                        st.stop()
-
-                    df_res = pd.DataFrame(results_rpp)
-                    st.success("計算完了！")
-                    st.dataframe(df_res)
-                    
-                    # CSVダウンロード
-                    csv_data = df_res.to_csv(index=False).encode('shift-jis', errors='ignore')
-                    st.download_button(
-                        label="推奨CPCリストをダウンロード (CSV)",
-                        data=csv_data,
-                        file_name='rpp_optimized.csv',
-                        mime='text/csv'
-                    )
+                        st.warning("処理対象となるデータがありませんでした。")
+                    else:
+                        df_res = pd.DataFrame(results_rpp)
+                        st.success("計算完了！")
+                        st.dataframe(df_res)
+                        
+                        # CSVダウンロード
+                        csv_data = df_res.to_csv(index=False).encode('shift-jis')
+                        st.download_button(
+                            label="推奨CPCリストをダウンロード (CSV)",
+                            data=csv_data,
+                            file_name='rpp_optimized.csv',
+                            mime='text/csv'
+                        )
 
                 except Exception as e:
                     st.error(f"予期せぬエラー: {e}")
