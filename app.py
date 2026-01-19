@@ -18,7 +18,7 @@ REVIEW_RATE = 0.08
 PRICE_UPLIFT = 1.2  
 
 # --- ページ設定 ---
-st.set_page_config(page_title="EC運営支援ツール Suite v9", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="EC運営支援ツール Suite v9.1", page_icon="🛍️", layout="wide")
 
 # --- CSSスタイル ---
 st.markdown("""
@@ -206,7 +206,7 @@ def generate_high_quality_alt(image_url, product_title, api_key, model_name):
 # メインアプリケーション
 # ==========================================
 def main():
-    st.title("EC運営支援ツール Suite v9")
+    st.title("EC運営支援ツール Suite v9.1")
     
     tab1, tab2, tab3 = st.tabs(["📊 楽天:競合分析", "💰 楽天:RPP改善", "🛒 Shopify:Alt自動入力"])
 
@@ -418,10 +418,7 @@ def main():
                     st.error(f"予期せぬエラー: {e}")
 
     # -----------------------------------
-    # Tab 3: Shopify Alt自動入力 (最終版)
-    # -----------------------------------
-# -----------------------------------
-    # Tab 3: Shopify Alt自動入力 (修正版: 下書きも対象)
+    # Tab 3: Shopify Alt自動入力 (修正版)
     # -----------------------------------
     with tab3:
         st.subheader("Shopify 画像Alt自動入力ツール (AI搭載)")
@@ -433,11 +430,11 @@ def main():
             g_key = st.text_input("Google Gemini API Key", type="password")
             model_choice = st.selectbox("使用モデル", ["gemini-1.5-pro", "gemini-1.5-flash"], index=0)
             
-            # ▼▼▼ 追加機能: 上書き設定 ▼▼▼
+            # 上書き設定
             overwrite = st.checkbox("⚠️ すでにAltが設定されている画像も上書きする", value=False)
             st.caption("※チェックを入れると、既存のAltテキスト（ファイル名など）をAIの文章で書き換えます。")
 
-        # ▼▼▼ 診断ボタン ▼▼▼
+        # 診断ボタン
         if st.button("🔍 データの診断（最初の5商品だけ確認）"):
             if not s_url or not s_token:
                 st.error("URLとトークンを入力してください")
@@ -465,7 +462,7 @@ def main():
                 except Exception as e:
                     st.error(f"診断エラー: {e}")
 
-        # ▼▼▼ 実行ボタン ▼▼▼
+        # 実行ボタン
         if st.button("Alt生成＆更新を実行", key="shopify_btn"):
             if not s_url or not s_token or not g_key:
                 st.error("すべてのAPI情報を入力してください。")
@@ -474,7 +471,7 @@ def main():
                 log_area = st.empty()
                 progress_shopify = st.progress(0)
                 
-                # 1. 商品取得 (status=anyを追加して下書きも取得)
+                # status=anyを追加して下書きも取得
                 headers = {"X-Shopify-Access-Token": s_token, "Content-Type": "application/json"}
                 url = f"https://{s_url}/admin/api/2024-01/products.json?limit=250&status=any"
                 
