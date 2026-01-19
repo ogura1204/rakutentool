@@ -8,14 +8,17 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, PatternFill, Font
 from openpyxl.utils import get_column_letter
+import google.generativeai as genai
+from PIL import Image
+from io import BytesIO
 
-# ▼▼▼ 設定エリア ▼▼▼
+# ▼▼▼ 設定エリア (楽天) ▼▼▼
 APP_ID = '1052224946268447244' 
 REVIEW_RATE = 0.08  
 PRICE_UPLIFT = 1.2  
 
 # --- ページ設定 ---
-st.set_page_config(page_title="楽天市場 運営支援ツール Suite v7", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="EC運営支援ツール Suite v8", page_icon="🛍️", layout="wide")
 
 # --- CSSスタイル ---
 st.markdown("""
@@ -27,7 +30,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 共通・ロジック関数群
+# 共通・ロジック関数群 (楽天)
 # ==========================================
 
 def get_item_key_from_url(url):
@@ -38,7 +41,6 @@ def get_item_key_from_url(url):
         return url
     except: return url
 
-# --- 競合分析用ロジック ---
 def calculate_metrics(item, uplift, rate):
     price = item['itemPrice']
     review_count = item['reviewCount']
@@ -105,20 +107,15 @@ def get_shop_top_items(shop_code, shop_name, limit=30):
         return results
     except: return []
 
-# --- RPP改善用ロジック ---
 def get_current_price_for_rpp(item_manage_number, shop_code):
     url = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
-    
-    # "lykke-hygge:abc-123" 対策
     keyword = str(item_manage_number).strip()
     if ":" in keyword:
         keyword = keyword.split(":")[-1]
 
     params = {
-        "applicationId": APP_ID,
-        "shopCode": shop_code,
-        "keyword": keyword,
-        "hits": 1
+        "applicationId": APP_ID, "shopCode": shop_code,
+        "keyword": keyword, "hits": 1
     }
     
     try:
@@ -135,7 +132,6 @@ def get_current_price_for_rpp(item_manage_number, shop_code):
     except Exception as e:
         return None, "通信エラー"
 
-# --- ヘルパー関数: データクリーニング ---
 def clean_number(val, default_val=0):
     if pd.isna(val): return default_val
     s_val = str(val).replace(',', '').replace('円', '').replace('%', '').strip()
@@ -145,13 +141,11 @@ def clean_number(val, default_val=0):
     except:
         return default_val
 
-# --- Excel生成 ---
 def format_worksheet(worksheet):
     left_align = Alignment(horizontal='left', vertical='center')
     fill_color = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
     hyperlink_font = Font(color="0000FF", underline="single")
     
-    # 数値フォーマットする列名（ユーザー指定の列名に合わせて追加）
     num_cols = ["価格", "レビュー総数", "推定累積販売数", "推定累積売上", 
                 "現在価格", "入札単価", "推奨入札単価", "商品CPC", "クリック数(合計)", 
                 "実績額(合計)", "CPC実績(合計)", "売上金額(合計720時間)", "売上件数(合計720時間)", "注文獲得単価(合計720時間)"]
@@ -173,18 +167,48 @@ def format_worksheet(worksheet):
 
     worksheet.freeze_panes = 'A2'
     worksheet.auto_filter.ref = worksheet.dimensions
-    
     for col in worksheet.columns:
         column = get_column_letter(col[0].column)
         worksheet.column_dimensions[column].width = 18
 
 # ==========================================
+# 共通・ロジック関数群 (Shopify & Gemini)
+# ==========================================
+
+def generate_high_quality_alt(image_url, product_title, api_key, model_name):
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        
+        response = requests.get(image_url)
+        img = Image.open(BytesIO(response.content))
+
+        prompt = f"""
+        あなたは熟練したECサイトのSEOスペシャリストです。
+        以下の商品画像を見て、検索上位を狙える「代替テキスト(alt属性)」を日本語で作成してください。
+
+        【商品名】{product_title}
+
+        【要件】
+        1. 商品名を自然に含める。
+        2. 画像の視覚的情報（色、素材、形状、光、雰囲気）を具体的に描写する。
+        3. 検索されそうな関連キーワード（北欧、インテリアなど）を自然に盛り込む。
+        4. 40〜80文字程度の自然な文章にする。
+        5. 「〜の画像」等の前置きは不要。テキストのみ出力。
+        """
+        
+        ai_res = model.generate_content([prompt, img])
+        return ai_res.text.strip()
+    except Exception as e:
+        return None
+
+# ==========================================
 # メインアプリケーション
 # ==========================================
 def main():
-    st.title("楽天市場 運営支援ツール Suite v7")
+    st.title("EC運営支援ツール Suite v8")
     
-    tab1, tab2 = st.tabs(["📊 競合分析ツール", "💰 RPP広告改善ツール"])
+    tab1, tab2, tab3 = st.tabs(["📊 楽天:競合分析", "💰 楽天:RPP改善", "🛒 Shopify:Alt自動入力"])
 
     # -----------------------------------
     # Tab 1: 競合分析
@@ -279,7 +303,7 @@ def main():
             target_roas = c1.number_input("目標ROAS (%)", min_value=100, value=400, step=50)
             min_cpc = c2.number_input("最低入札単価 (円)", min_value=10, value=25)
             max_cpc = c3.number_input("最高入札単価 (円)", min_value=10, value=100)
-            skip_rows_num = c4.number_input("ヘッダー開始行", min_value=1, value=7, help="通常は7行目です。")
+            skip_rows_num = c4.number_input("ヘッダー開始行", min_value=1, value=7)
 
         if st.button("価格取得＆改善実行", key="rpp_btn"):
             if not uploaded_file or not my_shop_code:
@@ -289,7 +313,6 @@ def main():
                     df_rpp = None
                     skip_rows_count = skip_rows_num - 1 
 
-                    # 1. 読み込み
                     if uploaded_file.name.endswith('.xlsx') or uploaded_file.name.endswith('.xls'):
                         uploaded_file.seek(0)
                         try:
@@ -308,7 +331,6 @@ def main():
                         st.error(f"読み込み失敗。ヘッダー開始行({skip_rows_num}行目)の設定を確認してください。")
                         st.stop()
                     
-                    # 2. 列名チェック (指定された正確な列名)
                     req_cols = [
                         "商品管理番号", "入札単価", "CTR(%)", "商品CPC", "クリック数(合計)", 
                         "実績額(合計)", "CPC実績(合計)", "売上金額(合計720時間)", 
@@ -316,9 +338,8 @@ def main():
                         "注文獲得単価(合計720時間)"
                     ]
                     
-                    # 商品管理番号さえあれば動くようにする（他はなくてもエラーにしないが、ある前提で進む）
                     if "商品管理番号" not in df_rpp.columns:
-                        st.error(f"CSVの中に「商品管理番号」列が見つかりません。読み込んだ列名: {list(df_rpp.columns)}")
+                        st.error(f"CSVの中に「商品管理番号」列が見つかりません。")
                         st.stop()
                     
                     st.write(f"データ件数: {len(df_rpp)}件")
@@ -332,18 +353,15 @@ def main():
                         item_manage_number = str(row.get("商品管理番号", "")).strip()
                         if not item_manage_number or item_manage_number.lower() == 'nan': continue
                         
-                        # 指定列の読み込み
-                        current_bid = clean_number(row.get("入札単価"), 25) # 入札単価
+                        current_bid = clean_number(row.get("入札単価"), 25)
                         actual_cpc = clean_number(row.get("CPC実績(合計)"), 25)
                         roas = clean_number(row.get("ROAS(合計720時間)(%)"), 0)
                         clicks = int(clean_number(row.get("クリック数(合計)"), 0))
                         
-                        # API価格取得
                         current_price, status_msg = get_current_price_for_rpp(item_manage_number, my_shop_code)
                         time.sleep(0.3)
                         
-                        # 改善ロジック (入札単価を調整)
-                        base_cpc = current_bid if current_bid > 0 else actual_cpc # 入札単価があればそれ基準、なければ実績CPC基準
+                        base_cpc = current_bid if current_bid > 0 else actual_cpc
                         new_bid = base_cpc
                         reason = "維持"
                         
@@ -357,7 +375,6 @@ def main():
                             new_bid = min(max_cpc, base_cpc + 10)
                             reason = "ROAS好調・強化"
                         
-                        # 結果格納用データの作成（元のデータを全部入れる）
                         row_data = {
                             "商品管理番号": item_manage_number,
                             "現在価格": current_price if current_price else "取得失敗",
@@ -365,9 +382,8 @@ def main():
                             "推奨入札単価": int(new_bid),
                             "変更理由": reason
                         }
-                        # 元のCSVにあった指定列も全て追加
                         for col in req_cols:
-                            if col != "商品管理番号": # 重複しないよう除外
+                            if col != "商品管理番号":
                                 row_data[col] = row.get(col, "")
                                 
                         results_rpp.append(row_data)
@@ -375,13 +391,11 @@ def main():
                     if not results_rpp:
                         st.warning("処理データなし")
                     else:
-                        # 並び替え: 重要な項目を前に
                         first_cols = ["商品管理番号", "現在価格", "推奨入札単価", "変更理由", "入札単価", "APIステータス"]
                         other_cols = [c for c in req_cols if c not in ["商品管理番号", "入札単価"]]
                         final_cols = first_cols + other_cols
                         
                         df_res = pd.DataFrame(results_rpp)
-                        # カラムの並び替え（存在するものだけ）
                         existing_cols = [c for c in final_cols if c in df_res.columns]
                         df_res = df_res[existing_cols]
                         
@@ -402,6 +416,75 @@ def main():
 
                 except Exception as e:
                     st.error(f"予期せぬエラー: {e}")
+
+    # -----------------------------------
+    # Tab 3: Shopify Alt自動入力 (NEW!)
+    # -----------------------------------
+    with tab3:
+        st.subheader("Shopify 画像Alt自動入力ツール (AI搭載)")
+        st.markdown("Gemini 1.5 Proが商品画像を解析し、SEOに強いAltテキストを自動入力します。")
+
+        with st.expander("API設定 (入力必須)", expanded=True):
+            s_url = st.text_input("Shopify ドメイン", placeholder="example.myshopify.com")
+            s_token = st.text_input("Shopify Access Token", type="password")
+            g_key = st.text_input("Google Gemini API Key", type="password")
+            model_choice = st.selectbox("使用モデル", ["gemini-1.5-pro", "gemini-1.5-flash"], index=0)
+
+        if st.button("Alt生成＆更新を実行", key="shopify_btn"):
+            if not s_url or not s_token or not g_key:
+                st.error("すべてのAPI情報を入力してください。")
+            else:
+                st.info("処理を開始します... (ウィンドウを閉じないでください)")
+                log_area = st.empty()
+                progress_shopify = st.progress(0)
+                
+                # 1. 商品取得
+                headers = {"X-Shopify-Access-Token": s_token, "Content-Type": "application/json"}
+                url = f"https://{s_url}/admin/api/2024-01/products.json?limit=250"
+                
+                try:
+                    res = requests.get(url, headers=headers)
+                    if res.status_code != 200:
+                        st.error(f"Shopify接続エラー: {res.text}")
+                        st.stop()
+                        
+                    products = res.json().get("products", [])
+                    total_products = len(products)
+                    update_count = 0
+                    
+                    for i, product in enumerate(products):
+                        p_id = product['id']
+                        p_title = product['title']
+                        
+                        # ログ表示
+                        log_area.text(f"確認中 ({i+1}/{total_products}): {p_title}")
+                        progress_shopify.progress((i + 1) / total_products)
+                        
+                        if not product['images']: continue
+                        
+                        for image in product['images']:
+                            if image['alt']: continue # Altがあればスキップ
+                            
+                            img_id = image['id']
+                            img_url = image['src']
+                            
+                            # AI生成
+                            new_alt = generate_high_quality_alt(img_url, p_title, g_key, model_choice)
+                            
+                            if new_alt:
+                                # 更新
+                                put_url = f"https://{s_url}/admin/api/2024-01/products/{p_id}/images/{img_id}.json"
+                                payload = {"image": {"id": img_id, "alt": new_alt}}
+                                requests.put(put_url, json=payload, headers=headers)
+                                update_count += 1
+                                st.toast(f"更新: {p_title} -> {new_alt[:20]}...")
+                                time.sleep(2) # API制限考慮
+                                
+                    st.success(f"完了！ 合計 {update_count} 枚の画像を更新しました。")
+                    log_area.text("処理完了")
+                    
+                except Exception as e:
+                    st.error(f"エラー: {e}")
 
 if __name__ == "__main__":
     main()
