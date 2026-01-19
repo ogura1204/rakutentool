@@ -8,9 +8,6 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, PatternFill, Font
 from openpyxl.utils import get_column_letter
-import google.generativeai as genai
-from PIL import Image
-from io import BytesIO
 
 # ▼▼▼ 設定エリア (楽天) ▼▼▼
 APP_ID = '1052224946268447244' 
@@ -18,7 +15,7 @@ REVIEW_RATE = 0.08
 PRICE_UPLIFT = 1.2  
 
 # --- ページ設定 ---
-st.set_page_config(page_title="EC運営支援ツール Suite v9.1", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="EC運営支援ツール (楽天版)", page_icon="🛍️", layout="wide")
 
 # --- CSSスタイル ---
 st.markdown("""
@@ -172,43 +169,12 @@ def format_worksheet(worksheet):
         worksheet.column_dimensions[column].width = 18
 
 # ==========================================
-# 共通・ロジック関数群 (Shopify & Gemini)
-# ==========================================
-
-def generate_high_quality_alt(image_url, product_title, api_key, model_name):
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
-        
-        response = requests.get(image_url)
-        img = Image.open(BytesIO(response.content))
-
-        prompt = f"""
-        あなたは熟練したECサイトのSEOスペシャリストです。
-        以下の商品画像を見て、検索上位を狙える「代替テキスト(alt属性)」を日本語で作成してください。
-
-        【商品名】{product_title}
-
-        【要件】
-        1. 商品名を自然に含める。
-        2. 画像の視覚的情報（色、素材、形状、光、雰囲気）を具体的に描写する。
-        3. 検索されそうな関連キーワード（北欧、インテリアなど）を自然に盛り込む。
-        4. 40〜80文字程度の自然な文章にする。
-        5. 「〜の画像」等の前置きは不要。テキストのみ出力。
-        """
-        
-        ai_res = model.generate_content([prompt, img])
-        return ai_res.text.strip()
-    except Exception as e:
-        return None
-
-# ==========================================
 # メインアプリケーション
 # ==========================================
 def main():
-    st.title("EC運営支援ツール Suite v9.1")
+    st.title("EC運営支援ツール (楽天版)")
     
-    tab1, tab2, tab3 = st.tabs(["📊 楽天:競合分析", "💰 楽天:RPP改善", "🛒 Shopify:Alt自動入力"])
+    tab1, tab2 = st.tabs(["📊 楽天:競合分析", "💰 楽天:RPP改善"])
 
     # -----------------------------------
     # Tab 1: 競合分析
@@ -416,128 +382,6 @@ def main():
 
                 except Exception as e:
                     st.error(f"予期せぬエラー: {e}")
-
-    # -----------------------------------
-    # Tab 3: Shopify Alt自動入力 (修正版)
-    # -----------------------------------
-    with tab3:
-        st.subheader("Shopify 画像Alt自動入力ツール (AI搭載)")
-        st.markdown("Gemini 1.5 Proが商品画像を解析し、SEOに強いAltテキストを自動入力します。")
-
-        with st.expander("API設定 (入力必須)", expanded=True):
-            s_url = st.text_input("Shopify ドメイン", placeholder="example.myshopify.com", value="lykke-hygge-2.myshopify.com")
-            s_token = st.text_input("Shopify Access Token", type="password")
-            g_key = st.text_input("Google Gemini API Key", type="password")
-            model_choice = st.selectbox("使用モデル", ["gemini-1.5-pro", "gemini-1.5-flash"], index=0)
-            
-            # 上書き設定
-            overwrite = st.checkbox("⚠️ すでにAltが設定されている画像も上書きする", value=False)
-            st.caption("※チェックを入れると、既存のAltテキスト（ファイル名など）をAIの文章で書き換えます。")
-
-        # 診断ボタン
-        if st.button("🔍 データの診断（最初の5商品だけ確認）"):
-            if not s_url or not s_token:
-                st.error("URLとトークンを入力してください")
-            else:
-                try:
-                    headers = {"X-Shopify-Access-Token": s_token, "Content-Type": "application/json"}
-                    # status=any で下書きも取得
-                    url = f"https://{s_url}/admin/api/2024-01/products.json?limit=5&status=any"
-                    res = requests.get(url, headers=headers)
-                    if res.status_code != 200:
-                        st.error(f"Shopify接続エラー: {res.text}")
-                    else:
-                        products = res.json().get("products", [])
-                        st.write(f"取得できた商品数: {len(products)}")
-                        for p in products:
-                            status_icon = "🟢" if p['status'] == 'active' else "📝"
-                            st.write(f"{status_icon} 商品名: {p['title']}")
-                            if not p['images']:
-                                st.caption("   ❌ 画像なし (メディアに追加してください)")
-                            for img in p['images']:
-                                st.text(f"   🖼 画像ID: {img['id']}")
-                                st.text(f"      現在のAlt: '{img['alt']}'") 
-                                st.image(img['src'], width=100)
-                            st.divider()
-                except Exception as e:
-                    st.error(f"診断エラー: {e}")
-
-        # 実行ボタン
-        if st.button("Alt生成＆更新を実行", key="shopify_btn"):
-            if not s_url or not s_token or not g_key:
-                st.error("すべてのAPI情報を入力してください。")
-            else:
-                st.info("処理を開始します... (ウィンドウを閉じないでください)")
-                log_area = st.empty()
-                progress_shopify = st.progress(0)
-                
-                # status=anyを追加して下書きも取得
-                headers = {"X-Shopify-Access-Token": s_token, "Content-Type": "application/json"}
-                url = f"https://{s_url}/admin/api/2024-01/products.json?limit=250&status=any"
-                
-                try:
-                    res = requests.get(url, headers=headers)
-                    if res.status_code != 200:
-                        st.error(f"Shopify接続エラー: {res.text}")
-                        st.stop()
-                        
-                    products = res.json().get("products", [])
-                    if not products:
-                        st.warning("商品データが取得できませんでした。")
-                        st.stop()
-
-                    total_products = len(products)
-                    update_count = 0
-                    skip_count = 0
-                    
-                    for i, product in enumerate(products):
-                        p_id = product['id']
-                        p_title = product['title']
-                        
-                        progress_shopify.progress((i + 1) / total_products)
-                        
-                        if not product['images']:
-                            continue
-                        
-                        for image in product['images']:
-                            img_id = image['id']
-                            img_url = image['src']
-                            current_alt = image.get('alt', '')
-
-                            # スキップ判定
-                            if current_alt and not overwrite:
-                                log_area.text(f"スキップ: {p_title} (既存Altあり: '{current_alt}')")
-                                skip_count += 1
-                                continue
-                            
-                            # ログ表示
-                            log_area.text(f"🤖 生成中: {p_title}...")
-
-                            # AI生成
-                            new_alt = generate_high_quality_alt(img_url, p_title, g_key, model_choice)
-                            
-                            if new_alt:
-                                # 更新
-                                put_url = f"https://{s_url}/admin/api/2024-01/products/{p_id}/images/{img_id}.json"
-                                payload = {"image": {"id": img_id, "alt": new_alt}}
-                                
-                                put_res = requests.put(put_url, json=payload, headers=headers)
-                                
-                                if put_res.status_code == 200:
-                                    update_count += 1
-                                    st.toast(f"✅ 更新成功: {p_title}")
-                                    print(f"Updated: {p_title} -> {new_alt}")
-                                else:
-                                    st.error(f"更新エラー: {put_res.text}")
-                                
-                                time.sleep(1.5) # API制限考慮
-                                
-                    st.success(f"完了！ {update_count} 枚更新しました。（スキップ: {skip_count} 枚）")
-                    if update_count == 0 and skip_count > 0:
-                        st.warning("すべてスキップされました。「上書きする」にチェックを入れて再試行してください。")
-                    
-                except Exception as e:
-                    st.error(f"エラー: {e}")
 
 if __name__ == "__main__":
     main()
