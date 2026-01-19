@@ -420,6 +420,9 @@ def main():
     # -----------------------------------
     # Tab 3: Shopify Alt自動入力 (最終版)
     # -----------------------------------
+# -----------------------------------
+    # Tab 3: Shopify Alt自動入力 (修正版: 下書きも対象)
+    # -----------------------------------
     with tab3:
         st.subheader("Shopify 画像Alt自動入力ツール (AI搭載)")
         st.markdown("Gemini 1.5 Proが商品画像を解析し、SEOに強いAltテキストを自動入力します。")
@@ -434,14 +437,15 @@ def main():
             overwrite = st.checkbox("⚠️ すでにAltが設定されている画像も上書きする", value=False)
             st.caption("※チェックを入れると、既存のAltテキスト（ファイル名など）をAIの文章で書き換えます。")
 
-        # ▼▼▼ 診断ボタン（追加） ▼▼▼
+        # ▼▼▼ 診断ボタン ▼▼▼
         if st.button("🔍 データの診断（最初の5商品だけ確認）"):
             if not s_url or not s_token:
                 st.error("URLとトークンを入力してください")
             else:
                 try:
                     headers = {"X-Shopify-Access-Token": s_token, "Content-Type": "application/json"}
-                    url = f"https://{s_url}/admin/api/2024-01/products.json?limit=5"
+                    # status=any で下書きも取得
+                    url = f"https://{s_url}/admin/api/2024-01/products.json?limit=5&status=any"
                     res = requests.get(url, headers=headers)
                     if res.status_code != 200:
                         st.error(f"Shopify接続エラー: {res.text}")
@@ -449,9 +453,10 @@ def main():
                         products = res.json().get("products", [])
                         st.write(f"取得できた商品数: {len(products)}")
                         for p in products:
-                            st.write(f"📦 商品名: {p['title']}")
+                            status_icon = "🟢" if p['status'] == 'active' else "📝"
+                            st.write(f"{status_icon} 商品名: {p['title']}")
                             if not p['images']:
-                                st.caption("   ❌ 画像なし")
+                                st.caption("   ❌ 画像なし (メディアに追加してください)")
                             for img in p['images']:
                                 st.text(f"   🖼 画像ID: {img['id']}")
                                 st.text(f"      現在のAlt: '{img['alt']}'") 
@@ -469,9 +474,9 @@ def main():
                 log_area = st.empty()
                 progress_shopify = st.progress(0)
                 
-                # 1. 商品取得
+                # 1. 商品取得 (status=anyを追加して下書きも取得)
                 headers = {"X-Shopify-Access-Token": s_token, "Content-Type": "application/json"}
-                url = f"https://{s_url}/admin/api/2024-01/products.json?limit=250"
+                url = f"https://{s_url}/admin/api/2024-01/products.json?limit=250&status=any"
                 
                 try:
                     res = requests.get(url, headers=headers)
@@ -536,6 +541,3 @@ def main():
                     
                 except Exception as e:
                     st.error(f"エラー: {e}")
-
-if __name__ == "__main__":
-    main()
