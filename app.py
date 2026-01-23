@@ -8,6 +8,8 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, PatternFill, Font
 from openpyxl.utils import get_column_letter
+import google.generativeai as genai
+from PIL import Image
 
 # ▼▼▼ 設定エリア (楽天) ▼▼▼
 APP_ID = '1052224946268447244' 
@@ -15,14 +17,15 @@ REVIEW_RATE = 0.08
 PRICE_UPLIFT = 1.2  
 
 # --- ページ設定 ---
-st.set_page_config(page_title="EC運営支援ツール (楽天版)", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="EC運営支援ツール Suite v10", page_icon="🛍️", layout="wide")
 
 # --- CSSスタイル ---
 st.markdown("""
 <style>
     .main { padding-top: 2rem; }
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #BF0000; color: white; }
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #BF0000; color: white; font-weight: bold; }
     .stDownloadButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #008000; color: white; }
+    textarea { font-family: monospace; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -169,12 +172,49 @@ def format_worksheet(worksheet):
         worksheet.column_dimensions[column].width = 18
 
 # ==========================================
+# 共通・ロジック関数群 (ブログAI生成)
+# ==========================================
+def generate_blog_content(api_key, image, keywords, tone):
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-pro')
+    
+    prompt = f"""
+    あなたはプロのECサイト運営者兼ブロガーです。
+    アップロードされた商品画像を見て、以下の条件でブログ記事を作成してください。
+
+    【ターゲット・キーワード】
+    {keywords}
+
+    【文体のトーン】
+    {tone}
+
+    【出力要件】
+    1. 記事のタイトルを作成してください。
+    2. 記事の本文は、そのままWordPressやShopifyに貼り付けられる「HTML形式」で出力してください。
+    3. <h2>, <h3>, <p>, <ul>, <li> などのタグを適切に使用し、読みやすくしてください。
+    4. 画像の視覚的特徴（色、素材、雰囲気）を具体的に描写し、読者が商品をイメージできるようにしてください。
+    5. SEOを意識し、キーワードを自然に盛り込んでください。
+    6. 記事の最後には、購買意欲をそそるまとめを書いてください。
+    
+    【画像生成用プロンプト】
+    記事の最後に、別途「この商品を魅力的なシーンで撮影したような画像をAIで作るための英語の指示文（Prompt）」を作成してください。
+    （例: A photorealistic shot of a ceramic vase on a wooden table, sunlight streaming through a window, cozy scandinavian style, 8k resolution...）
+    """
+    
+    if image:
+        response = model.generate_content([prompt, image])
+    else:
+        response = model.generate_content(prompt)
+        
+    return response.text
+
+# ==========================================
 # メインアプリケーション
 # ==========================================
 def main():
-    st.title("EC運営支援ツール (楽天版)")
+    st.title("EC運営支援ツール Suite v10")
     
-    tab1, tab2 = st.tabs(["📊 楽天:競合分析", "💰 楽天:RPP改善"])
+    tab1, tab2, tab3 = st.tabs(["📊 楽天:競合分析", "💰 楽天:RPP改善", "📝 ブログ自動生成"])
 
     # -----------------------------------
     # Tab 1: 競合分析
@@ -382,6 +422,58 @@ def main():
 
                 except Exception as e:
                     st.error(f"予期せぬエラー: {e}")
+
+    # -----------------------------------
+    # Tab 3: ブログ自動生成
+    # -----------------------------------
+    with tab3:
+        st.subheader("📝 毎日ブログ自動生成くん")
+        st.markdown("商品画像をアップするだけで、**HTML記事** と **画像生成用プロンプト** を作成します。")
+
+        # 設定エリア
+        with st.expander("設定 (Gemini API Key)", expanded=True):
+            gemini_key = st.text_input("Google Gemini API Key", type="password", key="blog_gemini_key")
+
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.subheader("1. 素材をセット")
+            uploaded_img = st.file_uploader("商品画像をアップロード (必須)", type=['jpg', 'png', 'jpeg'], key="blog_img")
+            
+            keywords = st.text_area("キーワード・ターゲット", height=100, 
+                                    placeholder="例：\n30代女性、北欧インテリア\n癒やし、ドライフラワー、プレゼント", key="blog_kw")
+            
+            tone = st.selectbox("記事の雰囲気", ["親しみやすい・共感", "高級感・プロフェッショナル", "シンプル・ミニマル", "情熱的・セールス強め"], key="blog_tone")
+
+            if uploaded_img:
+                st.image(uploaded_img, caption="対象の商品画像", use_column_width=True)
+
+        with col2:
+            st.subheader("2. 生成結果")
+            
+            if st.button("🚀 ブログ記事を生成する", key="blog_btn"):
+                if not gemini_key:
+                    st.error("設定エリアにGemini APIキーを入力してください。")
+                elif not uploaded_img:
+                    st.error("商品画像をアップロードしてください。")
+                else:
+                    try:
+                        with st.spinner("画像を見て、記事を書いています...（約30秒）"):
+                            # 画像データの準備
+                            img = Image.open(uploaded_img)
+                            
+                            # AI実行
+                            result_text = generate_blog_content(gemini_key, img, keywords, tone)
+                            
+                            st.success("生成完了！")
+                            
+                            # 結果の表示
+                            st.text_area("HTMLコード (コピーしてブログに貼り付け)", value=result_text, height=600)
+                            
+                            st.info("💡 ヒント: 上記のテキストの最後にある『画像生成用プロンプト』をコピーして、MidjourneyやChatGPT(DALL-E)に貼り付けると、イメージ画像が作れます。")
+                            
+                    except Exception as e:
+                        st.error(f"エラーが発生しました: {e}")
 
 if __name__ == "__main__":
     main()
