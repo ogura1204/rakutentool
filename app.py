@@ -17,7 +17,7 @@ REVIEW_RATE = 0.08
 PRICE_UPLIFT = 1.2  
 
 # --- ページ設定 ---
-st.set_page_config(page_title="EC運営支援ツール Suite v10.1", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="EC運営支援ツール Suite Pro", page_icon="🛍️", layout="wide")
 
 # --- CSSスタイル ---
 st.markdown("""
@@ -172,17 +172,10 @@ def format_worksheet(worksheet):
         worksheet.column_dimensions[column].width = 18
 
 # ==========================================
-# 共通・ロジック関数群 (ブログAI生成)
+# 共通・ロジック関数群 (ブログAI生成: Pro版)
 # ==========================================
 def generate_blog_content(api_key, image, keywords, tone):
     genai.configure(api_key=api_key)
-    
-    # 修正箇所: gemini-1.5-pro が見つからない場合のため、gemini-1.5-flash に変更
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-    except:
-        # 万が一Flashもダメなら gemini-pro (旧モデル) を試す
-        model = genai.GenerativeModel('gemini-pro')
     
     prompt = f"""
     あなたはプロのECサイト運営者兼ブロガーです。
@@ -206,19 +199,39 @@ def generate_blog_content(api_key, image, keywords, tone):
     記事の最後に、別途「この商品を魅力的なシーンで撮影したような画像をAIで作るための英語の指示文（Prompt）」を作成してください。
     （例: A photorealistic shot of a ceramic vase on a wooden table, sunlight streaming through a window, cozy scandinavian style, 8k resolution...）
     """
+
+    # 優先順位: 
+    # 1. gemini-1.5-pro (最高性能・今回のご希望)
+    # 2. gemini-1.5-flash (高速版)
+    # 3. gemini-pro-vision (旧・画像対応版)
     
     if image:
-        response = model.generate_content([prompt, image])
+        models_to_try = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro-vision']
     else:
-        response = model.generate_content(prompt)
-        
-    return response.text
+        models_to_try = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro']
+
+    last_error = None
+    
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            if image:
+                response = model.generate_content([prompt, image])
+            else:
+                response = model.generate_content(prompt)
+            return response.text # 成功したら終了
+            
+        except Exception as e:
+            last_error = e
+            continue # 失敗したら次のモデルへ
+
+    return f"エラー: 全てのAIモデルで生成に失敗しました。\n詳細: {last_error}"
 
 # ==========================================
 # メインアプリケーション
 # ==========================================
 def main():
-    st.title("EC運営支援ツール Suite v10.1")
+    st.title("EC運営支援ツール Suite Pro")
     
     tab1, tab2, tab3 = st.tabs(["📊 楽天:競合分析", "💰 楽天:RPP改善", "📝 ブログ自動生成"])
 
