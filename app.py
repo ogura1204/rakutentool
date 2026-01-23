@@ -17,7 +17,7 @@ REVIEW_RATE = 0.08
 PRICE_UPLIFT = 1.2  
 
 # --- ページ設定 ---
-st.set_page_config(page_title="EC運営支援ツール Suite v10", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="EC運営支援ツール Suite v10.1", page_icon="🛍️", layout="wide")
 
 # --- CSSスタイル ---
 st.markdown("""
@@ -176,7 +176,13 @@ def format_worksheet(worksheet):
 # ==========================================
 def generate_blog_content(api_key, image, keywords, tone):
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    
+    # 修正箇所: gemini-1.5-pro が見つからない場合のため、gemini-1.5-flash に変更
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+    except:
+        # 万が一Flashもダメなら gemini-pro (旧モデル) を試す
+        model = genai.GenerativeModel('gemini-pro')
     
     prompt = f"""
     あなたはプロのECサイト運営者兼ブロガーです。
@@ -212,7 +218,7 @@ def generate_blog_content(api_key, image, keywords, tone):
 # メインアプリケーション
 # ==========================================
 def main():
-    st.title("EC運営支援ツール Suite v10")
+    st.title("EC運営支援ツール Suite v10.1")
     
     tab1, tab2, tab3 = st.tabs(["📊 楽天:競合分析", "💰 楽天:RPP改善", "📝 ブログ自動生成"])
 
