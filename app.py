@@ -172,7 +172,7 @@ def format_worksheet(worksheet):
         worksheet.column_dimensions[column].width = 18
 
 # ==========================================
-# 共通・ロジック関数群 (ブログAI生成: Pro版)
+# 共通・ロジック関数群 (ブログAI生成: GitHub対応版)
 # ==========================================
 def generate_blog_content(api_key, image, keywords, tone):
     genai.configure(api_key=api_key)
@@ -200,14 +200,12 @@ def generate_blog_content(api_key, image, keywords, tone):
     （例: A photorealistic shot of a ceramic vase on a wooden table, sunlight streaming through a window, cozy scandinavian style, 8k resolution...）
     """
 
-    # 優先順位: 
-    # 1. gemini-1.5-pro (最高性能・今回のご希望)
-    # 2. gemini-1.5-flash (高速版)
-    # 3. gemini-pro-vision (旧・画像対応版)
-    
+    # 修正点: 廃止された 'gemini-pro-vision' を削除し、最新の1.5系のみを使用
     if image:
-        models_to_try = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro-vision']
+        # 画像がある場合: マルチモーダル対応の1.5系のみ
+        models_to_try = ['gemini-1.5-pro', 'gemini-1.5-flash']
     else:
+        # 画像がない場合: 旧gemini-proも可だが、基本は1.5系推奨
         models_to_try = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro']
 
     last_error = None
@@ -219,13 +217,15 @@ def generate_blog_content(api_key, image, keywords, tone):
                 response = model.generate_content([prompt, image])
             else:
                 response = model.generate_content(prompt)
-            return response.text # 成功したら終了
+            return response.text 
             
         except Exception as e:
             last_error = e
-            continue # 失敗したら次のモデルへ
+            # エラー内容をコンソールに出力してデバッグしやすくする
+            print(f"Model {model_name} failed: {e}")
+            continue
 
-    return f"エラー: 全てのAIモデルで生成に失敗しました。\n詳細: {last_error}"
+    return f"エラー: AIモデルでの生成に失敗しました。\n詳細: {last_error}\n対策: requirements.txtに 'google-generativeai>=0.8.3' が含まれているか確認してください。"
 
 # ==========================================
 # メインアプリケーション
